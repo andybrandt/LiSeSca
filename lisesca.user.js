@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.2.0
+// @version      0.2.1
 // @description  Scrapes LinkedIn people search results with human emulation
 // @author       Andy Brandt
 // @match        https://www.linkedin.com/search/results/people/*
@@ -20,7 +20,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.2.0',
+        VERSION: '0.2.1',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
 
@@ -61,6 +61,20 @@
             console.log('[LiSeSca] Config saved.');
         }
     };
+
+
+    // ===== PAGE DETECTION =====
+    // Checks whether the current page is a LinkedIn people search results page.
+    // Used as a safeguard to prevent scraping from starting on the wrong page,
+    // which can happen because LinkedIn is an SPA and the UI panel may persist
+    // across client-side navigations.
+    /**
+     * Determine if the current URL corresponds to a LinkedIn people search page.
+     * @returns {boolean} True if the URL matches the people search pattern.
+     */
+    function isOnPeopleSearchPage() {
+        return window.location.href.indexOf('linkedin.com/search/results/people') !== -1;
+    }
 
 
     // ===== CSS SELECTORS =====
@@ -1700,6 +1714,22 @@
          * Validates the stored state and continues the scrape cycle.
          */
         resumeScraping: function() {
+            // Safety guard: if the session resumes on a non-search page
+            // (e.g. user navigated away manually), stop and download what we have.
+            if (!isOnPeopleSearchPage()) {
+                console.warn('[LiSeSca] Resumed on wrong page. Finishing session with buffered data.');
+                UI.showStatus('Wrong page detected. Saving collected data...');
+                var buffer = State.getBuffer();
+                if (buffer.length > 0) {
+                    Output.downloadResults(buffer);
+                }
+                State.clear();
+                setTimeout(function() {
+                    UI.showIdleState();
+                }, 3000);
+                return;
+            }
+
             const state = State.getScrapingState();
             const pagesScraped = state.currentPage - state.startPage;
             console.log('[LiSeSca] Resuming scraping session. Page '
@@ -1715,6 +1745,17 @@
          * @param {string} pageCount - Number of pages to scrape ('1', '10', '50', 'all').
          */
         startScraping: function(pageCount) {
+            // Safety guard: verify we are on a people search page before scraping.
+            // The UI panel can persist on wrong pages due to LinkedIn's SPA navigation.
+            if (!isOnPeopleSearchPage()) {
+                console.warn('[LiSeSca] Not on a people search page. Scraping aborted.');
+                UI.showStatus('Wrong page — navigate to People search first.');
+                setTimeout(function() {
+                    UI.showIdleState();
+                }, 3000);
+                return;
+            }
+
             // Convert the page count selection to a numeric target
             // "all" maps to a large sentinel value (9999)
             const target = (pageCount === 'all') ? 9999 : parseInt(pageCount, 10);
