@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.3
+// @version      0.3.5
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @match        https://www.linkedin.com/search/results/people/*
@@ -174,9 +174,9 @@
         // People connections
         DETAIL_CONNECTIONS: '.job-details-people-who-can-help__connections-card-summary',
 
-        // Pagination
-        PAGINATION: '.artdeco-pagination__pages',
-        PAGINATION_BUTTON: '[data-test-pagination-page-btn]'
+        // Pagination (jobs uses different classes than people search)
+        PAGINATION: '.jobs-search-pagination__pages',
+        PAGINATION_BUTTON: '.jobs-search-pagination__indicator-button'
     };
 
 
@@ -1185,6 +1185,30 @@
             }).then(function(result) {
                 // If previous step returned null (from skipped job), propagate
                 if (result === null) {
+                    return null;
+                }
+
+                // Scroll the detail panel to the bottom to trigger lazy-loading
+                // of sections like "Premium Insights" and "About the Company"
+                // that only render when scrolled into view.
+                var detailPanel = document.querySelector('.jobs-search__job-details--container')
+                    || document.querySelector('.scaffold-layout__detail');
+                if (detailPanel) {
+                    var maxScroll = detailPanel.scrollHeight - detailPanel.clientHeight;
+                    if (maxScroll > 0) {
+                        detailPanel.scrollTo({ top: maxScroll, behavior: 'smooth' });
+                    }
+                }
+
+                // Brief wait for lazy-loaded bottom sections to render,
+                // then click any additional "Show more" buttons that appeared
+                return Emulator.randomDelay(600, 1000).then(function() {
+                    return self.clickShowMore();
+                }).then(function() {
+                    return 'ok';  // Signal that we should proceed with extraction
+                });
+            }).then(function(signal) {
+                if (signal === null) {
                     return null;
                 }
 
