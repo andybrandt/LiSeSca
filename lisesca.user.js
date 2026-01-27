@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.5
+// @version      0.3.6
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @match        https://www.linkedin.com/search/results/people/*
@@ -2466,11 +2466,33 @@
 
             var options;
             if (isJobs) {
+                // Try to read total results count from the page subtitle
+                var totalJobsText = '';
+                var subtitleEl = document.querySelector('.jobs-search-results-list__subtitle span');
+                var totalJobs = 0;
+                if (subtitleEl) {
+                    totalJobsText = (subtitleEl.textContent || '').trim();
+                    var match = totalJobsText.match(/^([\d,]+)\s+result/);
+                    if (match) {
+                        totalJobs = parseInt(match[1].replace(/,/g, ''), 10);
+                    }
+                }
+                var totalPages = totalJobs > 0
+                    ? Math.ceil(totalJobs / JobPaginator.JOBS_PER_PAGE)
+                    : 0;
+
+                // Build the "All" label with count and page info if available
+                var allLabel = 'All';
+                if (totalJobs > 0) {
+                    allLabel = 'All (' + totalJobs + ', ' + totalPages + 'p)';
+                }
+
                 options = [
                     { value: '1', text: '1' },
                     { value: '3', text: '3' },
                     { value: '5', text: '5' },
-                    { value: '10', text: '10' }
+                    { value: '10', text: '10' },
+                    { value: 'all', text: allLabel }
                 ];
             } else {
                 options = [
@@ -3148,7 +3170,7 @@
                 return;
             }
 
-            var target = parseInt(pageCount, 10);
+            var target = (pageCount === 'all') ? 25 : Math.min(parseInt(pageCount, 10), 25);
             var startPage = JobPaginator.getCurrentPage();
             var baseUrl = JobPaginator.getBaseSearchUrl();
 
