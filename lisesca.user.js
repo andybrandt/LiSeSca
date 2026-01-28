@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.7
+// @version      0.3.8
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @match        https://www.linkedin.com/search/results/people/*
@@ -275,7 +275,8 @@
             // Job-specific state keys
             SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
             JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
-            JOB_IDS_ON_PAGE: 'lisesca_jobIdsOnPage'   // JSON array of job IDs for current page
+            JOB_IDS_ON_PAGE: 'lisesca_jobIdsOnPage',  // JSON array of job IDs for current page
+            JOB_TOTAL: 'lisesca_jobTotal'             // total jobs count for "All" mode
         },
 
         /**
@@ -350,6 +351,7 @@
             // Reset job-specific state
             this.set(this.KEYS.JOB_INDEX, 0);
             this.set(this.KEYS.JOB_IDS_ON_PAGE, JSON.stringify([]));
+            this.set(this.KEYS.JOB_TOTAL, 0);
             console.log('[LiSeSca] Session started: mode=' + (scrapeMode || 'people')
                 + ', pages=' + targetPageCount + ', startPage=' + startPage);
         },
@@ -462,6 +464,7 @@
             GM_deleteValue(this.KEYS.SCRAPE_MODE);
             GM_deleteValue(this.KEYS.JOB_INDEX);
             GM_deleteValue(this.KEYS.JOB_IDS_ON_PAGE);
+            GM_deleteValue(this.KEYS.JOB_TOTAL);
             console.log('[LiSeSca] Session state cleared.');
         }
     };
@@ -2340,6 +2343,14 @@
                     display: block;
                 }
 
+                .lisesca-status-progress {
+                    display: none;
+                    margin-bottom: 4px;
+                }
+                .lisesca-status-progress.lisesca-visible {
+                    display: block;
+                }
+
                 /* Stop button (shown during scraping) */
                 .lisesca-stop-btn {
                     width: 100%;
@@ -2546,10 +2557,10 @@
                     ? Math.ceil(totalJobs / JobPaginator.JOBS_PER_PAGE)
                     : 0;
 
-                // Build the "All" label with count and page info if available
+                // Build the "All" label with page count if available
                 var allLabel = 'All';
                 if (totalJobs > 0) {
-                    allLabel = 'All (' + totalJobs + ', ' + totalPages + 'p)';
+                    allLabel = 'All (' + totalPages + 'p)';
                 }
 
                 options = [
@@ -2643,6 +2654,11 @@
             this.statusArea = document.createElement('div');
             this.statusArea.className = 'lisesca-status';
 
+            var progressText = document.createElement('div');
+            progressText.id = 'lisesca-status-progress';
+            progressText.className = 'lisesca-status-progress';
+            progressText.textContent = '';
+
             var statusText = document.createElement('div');
             statusText.id = 'lisesca-status-text';
             statusText.textContent = 'Initializing...';
@@ -2660,6 +2676,7 @@
                 }
             });
 
+            this.statusArea.appendChild(progressText);
             this.statusArea.appendChild(statusText);
             this.statusArea.appendChild(stopBtn);
 
@@ -2678,9 +2695,42 @@
         toggleMenu: function() {
             this.isMenuOpen = !this.isMenuOpen;
             if (this.isMenuOpen) {
+                this.updateJobsAllLabel();
                 this.menu.classList.add('lisesca-open');
             } else {
                 this.menu.classList.remove('lisesca-open');
+            }
+        },
+
+        /**
+         * Refresh the "All (Np)" label for jobs if total is known.
+         */
+        updateJobsAllLabel: function() {
+            if (!PageDetector.isOnJobsPage()) {
+                return;
+            }
+            var select = document.getElementById('lisesca-page-select');
+            if (!select) {
+                return;
+            }
+            var subtitleEl = document.querySelector('.jobs-search-results-list__subtitle span');
+            var totalJobs = 0;
+            if (subtitleEl) {
+                var totalJobsText = (subtitleEl.textContent || '').trim();
+                var match = totalJobsText.match(/^([\d,]+)\s+result/);
+                if (match) {
+                    totalJobs = parseInt(match[1].replace(/,/g, ''), 10);
+                }
+            }
+            var totalPages = totalJobs > 0
+                ? Math.ceil(totalJobs / JobPaginator.JOBS_PER_PAGE)
+                : 0;
+            var allLabel = (totalPages > 0) ? ('All (' + totalPages + 'p)') : 'All';
+            for (var i = 0; i < select.options.length; i += 1) {
+                if (select.options[i].value === 'all') {
+                    select.options[i].textContent = allLabel;
+                    break;
+                }
             }
         },
 
@@ -2696,6 +2746,24 @@
         },
 
         /**
+         * Update the job progress line in the status area.
+         * @param {string} message - Progress text to display (empty to hide).
+         */
+        showProgress: function(message) {
+            var progressEl = document.getElementById('lisesca-status-progress');
+            if (!progressEl) {
+                return;
+            }
+            if (message) {
+                progressEl.textContent = message;
+                progressEl.classList.add('lisesca-visible');
+            } else {
+                progressEl.textContent = '';
+                progressEl.classList.remove('lisesca-visible');
+            }
+        },
+
+        /**
          * Hide the status area.
          */
         hideStatus: function() {
@@ -2707,6 +2775,7 @@
          */
         showIdleState: function() {
             this.hideStatus();
+            this.showProgress('');
             this.menu.classList.remove('lisesca-open');
             this.isMenuOpen = false;
         },
@@ -3250,6 +3319,19 @@
             State.startSession(target, startPage, baseUrl, 'jobs');
             State.saveFormats(selectedFormats);
 
+            var totalJobs = 0;
+            if (pageCount === 'all') {
+                var subtitleEl = document.querySelector('.jobs-search-results-list__subtitle span');
+                if (subtitleEl) {
+                    var totalJobsText = (subtitleEl.textContent || '').trim();
+                    var match = totalJobsText.match(/^([\d,]+)\s+result/);
+                    if (match) {
+                        totalJobs = parseInt(match[1].replace(/,/g, ''), 10);
+                    }
+                }
+            }
+            State.set(State.KEYS.JOB_TOTAL, totalJobs);
+
             this.scrapePage();
         },
 
@@ -3287,6 +3369,12 @@
             var self = this;
             var state = State.getScrapingState();
 
+            var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
+            if (totalKnown > 0) {
+                UI.showProgress('Progress: (' + state.scrapedBuffer.length + '/' + totalKnown + ')');
+            } else {
+                UI.showProgress('');
+            }
             UI.showStatus('Page ' + state.currentPage + ' — Loading job cards...');
 
             // Wait for at least some job cards to appear in the DOM
@@ -3361,6 +3449,12 @@
             var statusMsg = 'Page ' + state.currentPage
                 + ' (' + (pagesScraped + 1) + ' of ' + state.targetPageCount + ')'
                 + ' — Job ' + (jobIndex + 1) + ' of ' + totalOnPage;
+            var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
+            if (totalKnown > 0) {
+                UI.showProgress('Progress: (' + state.scrapedBuffer.length + '/' + totalKnown + ')');
+            } else {
+                UI.showProgress('');
+            }
             UI.showStatus(statusMsg);
 
             // Extract the full job data
@@ -3472,6 +3566,7 @@
             console.log('[LiSeSca] Job scraping finished! Total: ' + totalJobs + ' jobs across '
                 + pagesScraped + ' page(s).');
 
+            UI.showProgress('');
             if (totalJobs > 0) {
                 UI.showStatus('Done! ' + totalJobs + ' jobs scraped across '
                     + pagesScraped + ' page(s). Downloading...');
