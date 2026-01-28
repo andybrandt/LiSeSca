@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.6
+// @version      0.3.7
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @match        https://www.linkedin.com/search/results/people/*
@@ -724,31 +724,64 @@
          * LinkedIn virtualizes the job list — only ~7 cards have fully rendered
          * inner content at a time, but ALL jobs have lightweight <li> shells
          * with data-occludable-job-id attributes present in the DOM from the start.
-         * This method reads those shell attributes directly (no scrolling needed).
+         *
+         * After a page navigation, Ember may not have inserted all shells yet
+         * when the first rendered cards appear. So we poll until the shell count
+         * stabilizes (same count for 3 consecutive checks).
          * @returns {Promise<Array<string>>} Array of all discovered job ID strings.
          */
         discoverAllJobIds: function() {
-            // Read all job IDs from the outer <li> shell elements.
-            // These are always present in the DOM regardless of scroll position.
-            var listItems = document.querySelectorAll(JobSelectors.JOB_LIST_ITEM);
-            var allIds = [];
+            var self = this;
+            var previousCount = 0;
+            var stableChecks = 0;
+            var requiredStable = 3;  // Must see same count 3 times in a row
+            var maxAttempts = 20;    // 20 * 300ms = 6 seconds max
+            var attempt = 0;
 
-            listItems.forEach(function(li) {
-                var jobId = li.getAttribute('data-occludable-job-id');
-                if (jobId && allIds.indexOf(jobId) === -1) {
-                    allIds.push(jobId);
+            /**
+             * Collect IDs from shell elements and check if count has stabilized.
+             * @returns {Promise<Array<string>>} Resolved when stable.
+             */
+            function pollUntilStable() {
+                attempt++;
+                var listItems = document.querySelectorAll(JobSelectors.JOB_LIST_ITEM);
+                var currentCount = listItems.length;
+
+                if (currentCount === previousCount && currentCount > 0) {
+                    stableChecks++;
+                } else {
+                    stableChecks = 0;
+                    previousCount = currentCount;
                 }
-            });
 
-            console.log('[LiSeSca] Discovered ' + allIds.length + ' job IDs from list item shells.');
+                if (stableChecks >= requiredStable || attempt >= maxAttempts) {
+                    // Collect the final set of IDs
+                    var allIds = [];
+                    listItems.forEach(function(li) {
+                        var jobId = li.getAttribute('data-occludable-job-id');
+                        if (jobId && allIds.indexOf(jobId) === -1) {
+                            allIds.push(jobId);
+                        }
+                    });
 
-            // Fallback: if no occludable shells found, try rendered cards directly
-            if (allIds.length === 0) {
-                allIds = this.getJobIds();
-                console.log('[LiSeSca] Fallback: found ' + allIds.length + ' job IDs from rendered cards.');
+                    console.log('[LiSeSca] Discovered ' + allIds.length + ' job IDs from list item shells'
+                        + ' (stabilized after ' + attempt + ' checks).');
+
+                    // Fallback: if no occludable shells found, try rendered cards directly
+                    if (allIds.length === 0) {
+                        allIds = self.getJobIds();
+                        console.log('[LiSeSca] Fallback: found ' + allIds.length + ' job IDs from rendered cards.');
+                    }
+
+                    return Promise.resolve(allIds);
+                }
+
+                return Emulator.randomDelay(250, 350).then(function() {
+                    return pollUntilStable();
+                });
             }
 
-            return Promise.resolve(allIds);
+            return pollUntilStable();
         },
 
         /**
@@ -1626,6 +1659,38 @@
          */
         hasPagination: function() {
             return document.querySelector(JobSelectors.PAGINATION) !== null;
+        },
+
+        /**
+         * Get the total number of pages from the "Page X of Y" text.
+         * @returns {number} Total pages, or 0 if not found.
+         */
+        getTotalPages: function() {
+            var pageState = document.querySelector('.jobs-search-pagination__page-state');
+            if (pageState) {
+                var text = (pageState.textContent || '').trim();
+                var match = text.match(/Page\s+\d+\s+of\s+(\d+)/i);
+                if (match) {
+                    return parseInt(match[1], 10);
+                }
+            }
+            return 0;
+        },
+
+        /**
+         * Check if there is a next page available.
+         * Uses the "Page X of Y" indicator, falling back to checking
+         * if the current page is less than the detected total.
+         * @returns {boolean}
+         */
+        hasNextPage: function() {
+            var totalPages = this.getTotalPages();
+            if (totalPages > 0) {
+                return this.getCurrentPage() < totalPages;
+            }
+            // Fallback: check if a "Next" button exists and is not disabled
+            var nextBtn = document.querySelector('.jobs-search-pagination__button--next');
+            return nextBtn !== null && !nextBtn.disabled;
         },
 
         /**
@@ -3365,6 +3430,13 @@
             // Check if pagination exists (collections pages may not have it)
             if (!JobPaginator.hasPagination()) {
                 console.log('[LiSeSca] No pagination found. Finishing with current results.');
+                this.finishScraping();
+                return;
+            }
+
+            // Check if there is actually a next page
+            if (!JobPaginator.hasNextPage()) {
+                console.log('[LiSeSca] No next page available (last page reached). Finishing.');
                 this.finishScraping();
                 return;
             }
