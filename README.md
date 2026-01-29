@@ -24,23 +24,13 @@ To avoid LinkedIn's bot detection, LiSeSca simulates human browsing behavior:
 - **Chrome** or **Chromium**-based browser
 - **[Tampermonkey](https://www.tampermonkey.net/)** browser extension ([Chrome Web Store](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo))
 
-### Enabling Developer Mode in Tampermonkey
+### Enabling User Scripts in Tampermonkey
 
-By default, Tampermonkey only allows scripts installed from its online repositories (Greasy Fork, etc.). To install LiSeSca from a local file or from this GitHub repository, you need to enable developer mode:
-
-1. Open Tampermonkey's **Dashboard** (click the Tampermonkey icon in your browser toolbar, then "Dashboard").
-2. Go to the **Settings** tab.
-3. Change the **Config mode** dropdown to **Advanced**.
-4. Scroll down to **Security** section.
-5. Set **Allow access to file URLs** to enabled (if installing from a local file).
-6. Under **Script Sources** or **User script sources**, make sure the option to allow scripts from URLs outside the official repositories is enabled.
-7. In Chrome, you may also need to go to `chrome://extensions/`, find Tampermonkey, click **Details**, and enable **Allow access to file URLs**.
-
-Without these settings, Tampermonkey will refuse to install the script.
+By default, Tampermonkey only allows scripts installed from its online repositories (Greasy Fork, etc.). To install LiSeSca from a local file or from this GitHub repository, you need to enable user scripts. [Follow steps described in Tampermonkey's FAQ here](https://www.tampermonkey.net/faq.php#Q209). Without this, as installed Tampermonkey will refuse to install the script.
 
 ## Installation
 
-1. Complete the prerequisites above.
+1. Make sure your Tampermonkey would allow this script to run (see above).
 2. Open the raw `lisesca.user.js` file (from this repository or your local copy).
 3. Tampermonkey should automatically detect the userscript and offer to install it. Click **Install**.
 4. Alternatively, open the Tampermonkey Dashboard, go to the **Utilities** tab, and paste the URL to the raw script file under **Install from URL**.
