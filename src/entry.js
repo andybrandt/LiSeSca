@@ -1,3 +1,0 @@
-    // ===== ENTRY POINT =====
-    Controller.init();
-

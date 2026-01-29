@@ -16,7 +16,7 @@
 // @run-at       document-idle
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     // ===== CONFIGURATION =====
@@ -88,175 +88,6 @@
             console.log('[LiSeSca] Config saved.');
         }
     };
-
-
-    // ===== PAGE DETECTION =====
-    // Detects whether we are on a people search page, a jobs page, or neither.
-    // Used to adapt the UI and dispatch to the correct controller.
-    const PageDetector = {
-
-        /**
-         * Determine the current page type based on the URL.
-         * @returns {string} 'people', 'jobs', or 'unknown'.
-         */
-        getPageType: function() {
-            var href = window.location.href;
-            if (href.indexOf('linkedin.com/search/results/people') !== -1) {
-                return 'people';
-            }
-            if (href.indexOf('linkedin.com/jobs/search') !== -1 ||
-                href.indexOf('linkedin.com/jobs/collections') !== -1) {
-                return 'jobs';
-            }
-            return 'unknown';
-        },
-
-        /**
-         * Check if we are on a LinkedIn people search page.
-         * @returns {boolean}
-         */
-        isOnPeopleSearchPage: function() {
-            return this.getPageType() === 'people';
-        },
-
-        /**
-         * Check if we are on a LinkedIn jobs page.
-         * @returns {boolean}
-         */
-        isOnJobsPage: function() {
-            return this.getPageType() === 'jobs';
-        }
-    };
-
-
-    // ===== CSS SELECTORS (PEOPLE SEARCH) =====
-    // Resilient selectors based on data attributes and ARIA roles,
-    // avoiding LinkedIn's generated CSS class names which change frequently.
-    const Selectors = {
-        RESULT_CARD: 'div[role="listitem"]',
-        TITLE_LINK: 'a[data-view-name="search-result-lockup-title"]'
-    };
-
-
-    // ===== CSS SELECTORS (JOBS) =====
-    // Selectors for LinkedIn's job search DOM.
-    // The jobs UI uses a two-panel layout: left panel = job list, right panel = detail view.
-    // Job cards use data-job-id attributes for identification.
-    const JobSelectors = {
-        // Left panel — job list
-        JOB_CARD: 'div[data-job-id]',
-        JOB_LIST_ITEM: '[data-occludable-job-id]',  // Outer <li> shell — always present for all jobs
-        CARD_TITLE_LINK: 'a.job-card-container__link',
-        CARD_COMPANY: '.artdeco-entity-lockup__subtitle span',
-        CARD_METADATA: '.job-card-container__metadata-wrapper li span',
-        CARD_INSIGHT: '.job-card-container__job-insight-text',
-
-        // Right panel — detail view
-        DETAIL_CONTAINER: '.jobs-search__job-details--container',
-        DETAIL_TITLE: '.job-details-jobs-unified-top-card__job-title h1',
-        DETAIL_COMPANY_NAME: '.job-details-jobs-unified-top-card__company-name a',
-        DETAIL_PRIMARY_DESC: '.job-details-jobs-unified-top-card__primary-description-container',
-        DETAIL_TERTIARY_DESC: '.job-details-jobs-unified-top-card__tertiary-description-container',
-        DETAIL_FIT_PREFS: '.job-details-fit-level-preferences button',
-        DETAIL_APPLY_BUTTON: '.jobs-apply-button',
-        DETAIL_JOB_DESCRIPTION: '#job-details',
-        DETAIL_SHOW_MORE: '.inline-show-more-text__button',
-
-        // Premium sections
-        DETAIL_PREMIUM_INSIGHTS: '.jobs-premium-applicant-insights',
-        DETAIL_PREMIUM_AI_ASSESSMENT: '.job-details-module h2',
-
-        // About the company
-        DETAIL_ABOUT_COMPANY: '.jobs-company',
-        DETAIL_COMPANY_INFO: '.jobs-company__inline-information',
-        DETAIL_COMPANY_DESC: '.jobs-company__company-description',
-
-        // People connections
-        DETAIL_CONNECTIONS: '.job-details-people-who-can-help__connections-card-summary',
-
-        // Pagination (jobs uses different classes than people search)
-        PAGINATION: '.jobs-search-pagination__pages',
-        PAGINATION_BUTTON: '.jobs-search-pagination__indicator-button'
-    };
-
-
-    // ===== TURNDOWN SERVICE =====
-    // Shared HTML-to-Markdown converter instance for job descriptions.
-    // Turndown is loaded via @require from CDN.
-    //
-    // IMPORTANT: LinkedIn enforces Trusted Types, a browser security policy
-    // that blocks direct innerHTML assignment. Turndown internally uses
-    // innerHTML when given an HTML string, which triggers a Trusted Types
-    // violation and crashes with "Cannot read properties of null ('firstChild')".
-    //
-    // To work around this, we use two strategies:
-    // 1. Pass live DOM nodes to Turndown (preferred — no innerHTML needed)
-    // 2. For HTML strings, use DOMParser to create a separate Document context
-    //    that is NOT subject to the page's Trusted Types policy, then pass
-    //    the parsed DOM node to Turndown.
-    var turndownService = null;
-
-    /**
-     * Get or create the shared TurndownService instance.
-     * Lazy initialization in case Turndown is loaded after our IIFE runs.
-     * @returns {TurndownService|null} The Turndown instance, or null if not available.
-     */
-    function getTurndownService() {
-        if (turndownService) {
-            return turndownService;
-        }
-        if (typeof TurndownService !== 'undefined') {
-            turndownService = new TurndownService({
-                headingStyle: 'atx',
-                bulletListMarker: '-'
-            });
-            return turndownService;
-        }
-        console.warn('[LiSeSca] TurndownService not available.');
-        return null;
-    }
-
-    /**
-     * Safely convert HTML to Markdown, bypassing LinkedIn's Trusted Types policy.
-     * Accepts either a DOM node or an HTML string.
-     *
-     * When given a DOM node: passes it directly to Turndown (no innerHTML involved).
-     * When given a string: uses DOMParser to build a DOM tree in a separate document
-     * context that is not subject to the page's Trusted Types restrictions, then
-     * passes the resulting node to Turndown.
-     *
-     * @param {HTMLElement|string} input - A live DOM element or an HTML string.
-     * @returns {string} The Markdown text, or plain text fallback, or empty string.
-     */
-    function htmlToMarkdown(input) {
-        if (!input) {
-            return '';
-        }
-
-        var td = getTurndownService();
-        if (!td) {
-            // Fallback: extract plain text if Turndown is not available
-            if (typeof input === 'string') {
-                var tempParser = new DOMParser();
-                var tempDoc = tempParser.parseFromString(input, 'text/html');
-                return (tempDoc.body.textContent || '').trim();
-            }
-            return (input.textContent || '').trim();
-        }
-
-        // If input is already a DOM node, pass it directly to Turndown
-        if (typeof input !== 'string') {
-            return td.turndown(input);
-        }
-
-        // For HTML strings, parse via DOMParser to avoid Trusted Types violations.
-        // DOMParser creates an entirely separate Document that does not inherit
-        // the page's Content Security Policy or Trusted Types restrictions.
-        var parser = new DOMParser();
-        var doc = parser.parseFromString(input, 'text/html');
-        return td.turndown(doc.body);
-    }
-
 
     // ===== STATE MANAGEMENT =====
     // Persists scraping state across page reloads using Tampermonkey storage.
@@ -469,11 +300,1268 @@
         }
     };
 
+    // ===== PAGE DETECTION =====
+    // Detects whether we are on a people search page, a jobs page, or neither.
+    // Used to adapt the UI and dispatch to the correct controller.
+    const PageDetector = {
+
+        /**
+         * Determine the current page type based on the URL.
+         * @returns {string} 'people', 'jobs', or 'unknown'.
+         */
+        getPageType: function() {
+            var href = window.location.href;
+            if (href.indexOf('linkedin.com/search/results/people') !== -1) {
+                return 'people';
+            }
+            if (href.indexOf('linkedin.com/jobs/search') !== -1 ||
+                href.indexOf('linkedin.com/jobs/collections') !== -1) {
+                return 'jobs';
+            }
+            return 'unknown';
+        },
+
+        /**
+         * Check if we are on a LinkedIn people search page.
+         * @returns {boolean}
+         */
+        isOnPeopleSearchPage: function() {
+            return this.getPageType() === 'people';
+        },
+
+        /**
+         * Check if we are on a LinkedIn jobs page.
+         * @returns {boolean}
+         */
+        isOnJobsPage: function() {
+            return this.getPageType() === 'jobs';
+        }
+    };
+
+    // ===== CSS SELECTORS (JOBS) =====
+    // Selectors for LinkedIn's job search DOM.
+    // The jobs UI uses a two-panel layout: left panel = job list, right panel = detail view.
+    // Job cards use data-job-id attributes for identification.
+    const JobSelectors = {
+        // Left panel — job list
+        JOB_CARD: 'div[data-job-id]',
+        JOB_LIST_ITEM: '[data-occludable-job-id]',  // Outer <li> shell — always present for all jobs
+        CARD_TITLE_LINK: 'a.job-card-container__link',
+        CARD_COMPANY: '.artdeco-entity-lockup__subtitle span',
+        CARD_METADATA: '.job-card-container__metadata-wrapper li span',
+        CARD_INSIGHT: '.job-card-container__job-insight-text',
+
+        DETAIL_TITLE: '.job-details-jobs-unified-top-card__job-title h1',
+        DETAIL_COMPANY_NAME: '.job-details-jobs-unified-top-card__company-name a',
+        DETAIL_TERTIARY_DESC: '.job-details-jobs-unified-top-card__tertiary-description-container',
+        DETAIL_FIT_PREFS: '.job-details-fit-level-preferences button',
+        DETAIL_APPLY_BUTTON: '.jobs-apply-button',
+        DETAIL_JOB_DESCRIPTION: '#job-details',
+        DETAIL_SHOW_MORE: '.inline-show-more-text__button',
+
+        // Premium sections
+        DETAIL_PREMIUM_INSIGHTS: '.jobs-premium-applicant-insights',
+        // About the company
+        DETAIL_ABOUT_COMPANY: '.jobs-company',
+        DETAIL_COMPANY_INFO: '.jobs-company__inline-information',
+        DETAIL_COMPANY_DESC: '.jobs-company__company-description',
+
+        // People connections
+        DETAIL_CONNECTIONS: '.job-details-people-who-can-help__connections-card-summary',
+
+        // Pagination (jobs uses different classes than people search)
+        PAGINATION: '.jobs-search-pagination__pages'};
+
+    // ===== PAGINATION (JOBS) =====
+    // Handles navigation between job search result pages.
+    // Jobs use the "start=" parameter (increments by 25 per page).
+
+    const JobPaginator = {
+        /** Number of jobs per page on LinkedIn */
+        JOBS_PER_PAGE: 25,
+
+        /**
+         * Get the current "start" parameter value from the URL.
+         * @returns {number} The start offset (0-based), default 0.
+         */
+        getCurrentStartParam: function() {
+            var url = new URL(window.location.href);
+            var startParam = url.searchParams.get('start');
+            return startParam ? parseInt(startParam, 10) : 0;
+        },
+
+        /**
+         * Get the current logical page number (1-based) from the start parameter.
+         * @returns {number} Page number (1, 2, 3, ...).
+         */
+        getCurrentPage: function() {
+            return Math.floor(this.getCurrentStartParam() / this.JOBS_PER_PAGE) + 1;
+        },
+
+        /**
+         * Get the base search URL without the start parameter.
+         * @returns {string} The clean base URL.
+         */
+        getBaseSearchUrl: function() {
+            var url = new URL(window.location.href);
+            url.searchParams.delete('start');
+            return url.toString();
+        },
+
+        /**
+         * Check if pagination exists on the page.
+         * Collections/recommended pages may not have pagination.
+         * @returns {boolean}
+         */
+        hasPagination: function() {
+            return document.querySelector(JobSelectors.PAGINATION) !== null;
+        },
+
+        /**
+         * Get the total number of pages from the "Page X of Y" text.
+         * @returns {number} Total pages, or 0 if not found.
+         */
+        getTotalPages: function() {
+            var pageState = document.querySelector('.jobs-search-pagination__page-state');
+            if (pageState) {
+                var text = (pageState.textContent || '').trim();
+                var match = text.match(/Page\s+\d+\s+of\s+(\d+)/i);
+                if (match) {
+                    return parseInt(match[1], 10);
+                }
+            }
+            return 0;
+        },
+
+        /**
+         * Check if there is a next page available.
+         * Uses the "Page X of Y" indicator, falling back to checking
+         * if the current page is less than the detected total.
+         * @returns {boolean}
+         */
+        hasNextPage: function() {
+            var totalPages = this.getTotalPages();
+            if (totalPages > 0) {
+                return this.getCurrentPage() < totalPages;
+            }
+            // Fallback: check if a "Next" button exists and is not disabled
+            var nextBtn = document.querySelector('.jobs-search-pagination__button--next');
+            return nextBtn !== null && !nextBtn.disabled;
+        },
+
+        /**
+         * Navigate to a specific page by setting the start parameter.
+         * @param {number} pageNum - The page number (1-based) to navigate to.
+         */
+        navigateToPage: function(pageNum) {
+            var baseUrl = State.get(State.KEYS.SEARCH_URL, this.getBaseSearchUrl());
+            var url = new URL(baseUrl);
+            var startValue = (pageNum - 1) * this.JOBS_PER_PAGE;
+            if (startValue > 0) {
+                url.searchParams.set('start', startValue.toString());
+            }
+            var targetUrl = url.toString();
+
+            console.log('[LiSeSca] Navigating to jobs page ' + pageNum
+                + ' (start=' + startValue + '): ' + targetUrl);
+            window.location.href = targetUrl;
+        }
+    };
+
+    // ===== USER INTERFACE =====
+    // Creates and manages the floating overlay panel with scrape controls.
+    // Adapts to the current page type: green SCRAPE button for people search,
+    // blue SCRAPE button for jobs search, with different page count options.
+
+    // Controller and JobController are used in event handlers (runtime calls, not import-time)
+    // They will be available in the bundled IIFE scope when Rollup bundles the code.
+    // We import them here to satisfy the ES module system.
+    // Note: This creates a circular dependency which Rollup handles correctly for IIFE output.
+    let Controller$1, JobController$1;
+
+    function setControllers(ctrl, jobCtrl) {
+        Controller$1 = ctrl;
+        JobController$1 = jobCtrl;
+    }
+
+    const UI = {
+        /** References to key DOM elements */
+        panel: null,
+        menu: null,
+        statusArea: null,
+        isMenuOpen: false,
+
+        /**
+         * Inject all LiSeSca styles into the page.
+         */
+        injectStyles: function() {
+            GM_addStyle(`
+            /* ---- LiSeSca floating panel ---- */
+            .lisesca-panel {
+                position: fixed;
+                top: 10px;
+                right: 10px;
+                z-index: 10000;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 13px;
+                background: #1b1f23;
+                color: #e1e4e8;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+                padding: 0;
+                min-width: 180px;
+                user-select: none;
+            }
+
+            /* Top bar with SCRAPE button and gear icon */
+            .lisesca-topbar {
+                display: flex;
+                align-items: center;
+                padding: 8px 10px;
+                gap: 8px;
+            }
+
+            /* The main SCRAPE button — green for people, blue for jobs */
+            .lisesca-scrape-btn {
+                flex: 1;
+                background: #2ea44f;
+                color: #ffffff;
+                border: none;
+                border-radius: 5px;
+                padding: 6px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                letter-spacing: 0.5px;
+                transition: background 0.15s;
+            }
+            .lisesca-scrape-btn:hover {
+                background: #3fb950;
+            }
+
+            /* Blue variant for jobs pages */
+            .lisesca-scrape-btn--jobs {
+                background: #1f6feb;
+            }
+            .lisesca-scrape-btn--jobs:hover {
+                background: #388bfd;
+            }
+
+            /* Gear (config) icon button */
+            .lisesca-gear-btn {
+                background: none;
+                border: none;
+                color: #8b949e;
+                cursor: pointer;
+                font-size: 16px;
+                padding: 4px;
+                line-height: 1;
+                transition: color 0.15s;
+            }
+            .lisesca-gear-btn:hover {
+                color: #e1e4e8;
+            }
+
+            /* Dropdown menu (hidden by default) */
+            .lisesca-menu {
+                display: none;
+                padding: 8px 10px 10px;
+                border-top: 1px solid #30363d;
+            }
+            .lisesca-menu.lisesca-open {
+                display: block;
+            }
+
+            /* Label text above the dropdown */
+            .lisesca-menu-label {
+                font-size: 11px;
+                color: #8b949e;
+                margin-bottom: 5px;
+            }
+
+            /* Page count selector dropdown */
+            .lisesca-select {
+                width: 100%;
+                background: #0d1117;
+                color: #e1e4e8;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 5px 8px;
+                font-size: 13px;
+                margin-bottom: 8px;
+                cursor: pointer;
+            }
+            .lisesca-select:focus {
+                outline: none;
+                border-color: #58a6ff;
+            }
+
+            /* Format selection checkboxes */
+            .lisesca-fmt-label {
+                font-size: 11px;
+                color: #8b949e;
+                margin-bottom: 5px;
+                margin-top: 4px;
+            }
+
+            .lisesca-fmt-row {
+                display: flex;
+                gap: 10px;
+                margin-bottom: 8px;
+            }
+
+            .lisesca-checkbox-label {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                font-size: 12px;
+                color: #c9d1d9;
+                cursor: pointer;
+            }
+
+            .lisesca-checkbox-label input[type="checkbox"] {
+                -webkit-appearance: checkbox !important;
+                appearance: checkbox !important;
+                position: static !important;
+                width: 14px !important;
+                height: 14px !important;
+                min-width: 14px !important;
+                min-height: 14px !important;
+                flex-shrink: 0 !important;
+                accent-color: #58a6ff;
+                cursor: pointer;
+                margin: 0 2px 0 0 !important;
+                padding: 0 !important;
+                opacity: 1 !important;
+            }
+
+            /* GO button inside the dropdown */
+            .lisesca-go-btn {
+                width: 100%;
+                background: #1f6feb;
+                color: #ffffff;
+                border: none;
+                border-radius: 5px;
+                padding: 6px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-go-btn:hover {
+                background: #388bfd;
+            }
+
+            /* Status display area (shown during scraping) */
+            .lisesca-status {
+                display: none;
+                padding: 8px 10px 10px;
+                border-top: 1px solid #30363d;
+                font-size: 12px;
+                color: #8b949e;
+            }
+            .lisesca-status.lisesca-visible {
+                display: block;
+            }
+
+            .lisesca-status-progress {
+                display: none;
+                margin-bottom: 4px;
+            }
+            .lisesca-status-progress.lisesca-visible {
+                display: block;
+            }
+
+            /* Stop button (shown during scraping) */
+            .lisesca-stop-btn {
+                width: 100%;
+                background: #da3633;
+                color: #ffffff;
+                border: none;
+                border-radius: 5px;
+                padding: 5px 12px;
+                font-size: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                margin-top: 6px;
+                transition: background 0.15s;
+            }
+            .lisesca-stop-btn:hover {
+                background: #f85149;
+            }
+
+            /* ---- Configuration overlay ---- */
+            .lisesca-config-overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 10001;
+                justify-content: center;
+                align-items: center;
+            }
+            .lisesca-config-overlay.lisesca-visible {
+                display: flex;
+            }
+
+            .lisesca-config-panel {
+                background: #1b1f23;
+                color: #e1e4e8;
+                border-radius: 10px;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+                padding: 20px 24px;
+                min-width: 280px;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 13px;
+            }
+
+            .lisesca-config-title {
+                font-size: 15px;
+                font-weight: 600;
+                margin-bottom: 16px;
+                color: #f0f6fc;
+            }
+
+            .lisesca-config-section {
+                font-size: 12px;
+                font-weight: 600;
+                color: #8b949e;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-top: 14px;
+                margin-bottom: 10px;
+                padding-bottom: 4px;
+                border-bottom: 1px solid #30363d;
+            }
+
+            .lisesca-config-row {
+                margin-bottom: 12px;
+            }
+
+            .lisesca-config-row label {
+                display: block;
+                font-size: 11px;
+                color: #8b949e;
+                margin-bottom: 4px;
+            }
+
+            .lisesca-config-row input {
+                width: 100%;
+                background: #0d1117;
+                color: #e1e4e8;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 5px 8px;
+                font-size: 13px;
+                box-sizing: border-box;
+            }
+            .lisesca-config-row input:focus {
+                outline: none;
+                border-color: #58a6ff;
+            }
+
+            .lisesca-config-error {
+                color: #f85149;
+                font-size: 11px;
+                margin-top: 4px;
+                min-height: 16px;
+            }
+
+            .lisesca-config-buttons {
+                display: flex;
+                gap: 8px;
+                margin-top: 16px;
+            }
+
+            .lisesca-config-save {
+                flex: 1;
+                background: #1f6feb;
+                color: #ffffff;
+                border: none;
+                border-radius: 5px;
+                padding: 7px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-config-save:hover {
+                background: #388bfd;
+            }
+
+            .lisesca-config-cancel {
+                flex: 1;
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+                border-radius: 5px;
+                padding: 7px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-config-cancel:hover {
+                background: #30363d;
+            }
+        `);
+        },
+
+        /**
+         * Build and inject the floating panel, adapting to the current page type.
+         * People search: green SCRAPE button, page options 1/10/50/All.
+         * Jobs search: blue SCRAPE button, page options 1/3/5/10.
+         */
+        createPanel: function() {
+            var pageType = PageDetector.getPageType();
+            var isJobs = (pageType === 'jobs');
+
+            // Create the main container
+            this.panel = document.createElement('div');
+            this.panel.className = 'lisesca-panel';
+
+            // --- Top bar ---
+            var topbar = document.createElement('div');
+            topbar.className = 'lisesca-topbar';
+
+            // SCRAPE button — color depends on page type
+            var scrapeBtn = document.createElement('button');
+            scrapeBtn.className = 'lisesca-scrape-btn' + (isJobs ? ' lisesca-scrape-btn--jobs' : '');
+            scrapeBtn.textContent = 'SCRAPE';
+            scrapeBtn.addEventListener('click', function() {
+                UI.toggleMenu();
+            });
+
+            // Gear icon — opens configuration
+            var gearBtn = document.createElement('button');
+            gearBtn.className = 'lisesca-gear-btn';
+            gearBtn.innerHTML = '&#9881;';
+            gearBtn.title = 'Configuration';
+            gearBtn.addEventListener('click', function() {
+                UI.showConfig();
+            });
+
+            topbar.appendChild(scrapeBtn);
+            topbar.appendChild(gearBtn);
+
+            // --- Dropdown menu ---
+            this.menu = document.createElement('div');
+            this.menu.className = 'lisesca-menu';
+
+            // "Pages to scrape" label
+            var label = document.createElement('div');
+            label.className = 'lisesca-menu-label';
+            label.textContent = 'Pages to scrape:';
+
+            // Page count selector — different options for people vs jobs
+            var select = document.createElement('select');
+            select.className = 'lisesca-select';
+            select.id = 'lisesca-page-select';
+
+            var options;
+            if (isJobs) {
+                // Try to read total results count from the page subtitle
+                var totalJobsText = '';
+                var subtitleEl = document.querySelector('.jobs-search-results-list__subtitle span');
+                var totalJobs = 0;
+                if (subtitleEl) {
+                    totalJobsText = (subtitleEl.textContent || '').trim();
+                    var match = totalJobsText.match(/^([\d,]+)\s+result/);
+                    if (match) {
+                        totalJobs = parseInt(match[1].replace(/,/g, ''), 10);
+                    }
+                }
+                var totalPages = totalJobs > 0
+                    ? Math.ceil(totalJobs / JobPaginator.JOBS_PER_PAGE)
+                    : 0;
+
+                // Build the "All" label with page count if available
+                var allLabel = 'All';
+                if (totalJobs > 0) {
+                    allLabel = 'All (' + totalPages + 'p)';
+                }
+
+                options = [
+                    { value: '1', text: '1' },
+                    { value: '3', text: '3' },
+                    { value: '5', text: '5' },
+                    { value: '10', text: '10' },
+                    { value: 'all', text: allLabel }
+                ];
+            } else {
+                options = [
+                    { value: '1', text: '1' },
+                    { value: '10', text: '10' },
+                    { value: '50', text: '50' },
+                    { value: 'all', text: 'All' }
+                ];
+            }
+            options.forEach(function(opt) {
+                var option = document.createElement('option');
+                option.value = opt.value;
+                option.textContent = opt.text;
+                select.appendChild(option);
+            });
+
+            // --- Format selection checkboxes ---
+            var fmtLabel = document.createElement('div');
+            fmtLabel.className = 'lisesca-fmt-label';
+            fmtLabel.textContent = 'Save as:';
+
+            var fmtRow = document.createElement('div');
+            fmtRow.className = 'lisesca-fmt-row';
+
+            // XLSX checkbox (checked by default)
+            var xlsxLabel = document.createElement('label');
+            xlsxLabel.className = 'lisesca-checkbox-label';
+            var xlsxCheck = document.createElement('input');
+            xlsxCheck.type = 'checkbox';
+            xlsxCheck.id = 'lisesca-fmt-xlsx';
+            xlsxCheck.checked = true;
+            xlsxLabel.appendChild(xlsxCheck);
+            xlsxLabel.appendChild(document.createTextNode('XLSX'));
+            fmtRow.appendChild(xlsxLabel);
+
+            // CSV checkbox — only for people search (not useful for jobs)
+            if (!isJobs) {
+                var csvLabel = document.createElement('label');
+                csvLabel.className = 'lisesca-checkbox-label';
+                var csvCheck = document.createElement('input');
+                csvCheck.type = 'checkbox';
+                csvCheck.id = 'lisesca-fmt-csv';
+                csvCheck.checked = false;
+                csvLabel.appendChild(csvCheck);
+                csvLabel.appendChild(document.createTextNode('CSV'));
+                fmtRow.appendChild(csvLabel);
+            }
+
+            // Markdown checkbox (unchecked by default)
+            var mdLabel = document.createElement('label');
+            mdLabel.className = 'lisesca-checkbox-label';
+            var mdCheck = document.createElement('input');
+            mdCheck.type = 'checkbox';
+            mdCheck.id = 'lisesca-fmt-md';
+            mdCheck.checked = false;
+            mdLabel.appendChild(mdCheck);
+            mdLabel.appendChild(document.createTextNode('Markdown'));
+            fmtRow.appendChild(mdLabel);
+
+            // GO button — dispatches to the correct controller
+            var goBtn = document.createElement('button');
+            goBtn.className = 'lisesca-go-btn';
+            goBtn.textContent = 'GO';
+            goBtn.addEventListener('click', function() {
+                var pageSelect = document.getElementById('lisesca-page-select');
+                var selectedValue = pageSelect.value;
+                console.log('[LiSeSca] GO pressed, pages=' + selectedValue + ', pageType=' + pageType);
+
+                if (isJobs) {
+                    JobController$1.startScraping(selectedValue);
+                } else {
+                    Controller$1.startScraping(selectedValue);
+                }
+            });
+
+            this.menu.appendChild(label);
+            this.menu.appendChild(select);
+            this.menu.appendChild(fmtLabel);
+            this.menu.appendChild(fmtRow);
+            this.menu.appendChild(goBtn);
+
+            // --- Status area ---
+            this.statusArea = document.createElement('div');
+            this.statusArea.className = 'lisesca-status';
+
+            var progressText = document.createElement('div');
+            progressText.id = 'lisesca-status-progress';
+            progressText.className = 'lisesca-status-progress';
+            progressText.textContent = '';
+
+            var statusText = document.createElement('div');
+            statusText.id = 'lisesca-status-text';
+            statusText.textContent = 'Initializing...';
+
+            var stopBtn = document.createElement('button');
+            stopBtn.className = 'lisesca-stop-btn';
+            stopBtn.textContent = 'STOP';
+            stopBtn.addEventListener('click', function() {
+                // Dispatch to the correct controller based on active scrape mode
+                var mode = State.getScrapeMode();
+                if (mode === 'jobs') {
+                    JobController$1.stopScraping();
+                } else {
+                    Controller$1.stopScraping();
+                }
+            });
+
+            this.statusArea.appendChild(progressText);
+            this.statusArea.appendChild(statusText);
+            this.statusArea.appendChild(stopBtn);
+
+            // --- Assemble panel ---
+            this.panel.appendChild(topbar);
+            this.panel.appendChild(this.menu);
+            this.panel.appendChild(this.statusArea);
+
+            document.body.appendChild(this.panel);
+            console.log('[LiSeSca] UI panel injected (' + pageType + ' mode).');
+        },
+
+        /**
+         * Toggle the dropdown menu open/closed.
+         */
+        toggleMenu: function() {
+            this.isMenuOpen = !this.isMenuOpen;
+            if (this.isMenuOpen) {
+                this.updateJobsAllLabel();
+                this.menu.classList.add('lisesca-open');
+            } else {
+                this.menu.classList.remove('lisesca-open');
+            }
+        },
+
+        /**
+         * Refresh the "All (Np)" label for jobs if total is known.
+         */
+        updateJobsAllLabel: function() {
+            if (!PageDetector.isOnJobsPage()) {
+                return;
+            }
+            var select = document.getElementById('lisesca-page-select');
+            if (!select) {
+                return;
+            }
+            var subtitleEl = document.querySelector('.jobs-search-results-list__subtitle span');
+            var totalJobs = 0;
+            if (subtitleEl) {
+                var totalJobsText = (subtitleEl.textContent || '').trim();
+                var match = totalJobsText.match(/^([\d,]+)\s+result/);
+                if (match) {
+                    totalJobs = parseInt(match[1].replace(/,/g, ''), 10);
+                }
+            }
+            var totalPages = totalJobs > 0
+                ? Math.ceil(totalJobs / JobPaginator.JOBS_PER_PAGE)
+                : 0;
+            var allLabel = (totalPages > 0) ? ('All (' + totalPages + 'p)') : 'All';
+            for (var i = 0; i < select.options.length; i += 1) {
+                if (select.options[i].value === 'all') {
+                    select.options[i].textContent = allLabel;
+                    break;
+                }
+            }
+        },
+
+        /**
+         * Show a status message in the status area.
+         * @param {string} message - The status text to display.
+         */
+        showStatus: function(message) {
+            this.menu.classList.remove('lisesca-open');
+            this.isMenuOpen = false;
+            this.statusArea.classList.add('lisesca-visible');
+            document.getElementById('lisesca-status-text').textContent = message;
+        },
+
+        /**
+         * Update the job progress line in the status area.
+         * @param {string} message - Progress text to display (empty to hide).
+         */
+        showProgress: function(message) {
+            var progressEl = document.getElementById('lisesca-status-progress');
+            if (!progressEl) {
+                return;
+            }
+            if (message) {
+                progressEl.textContent = message;
+                progressEl.classList.add('lisesca-visible');
+            } else {
+                progressEl.textContent = '';
+                progressEl.classList.remove('lisesca-visible');
+            }
+        },
+
+        /**
+         * Hide the status area.
+         */
+        hideStatus: function() {
+            this.statusArea.classList.remove('lisesca-visible');
+        },
+
+        /**
+         * Switch the panel into "idle" mode.
+         */
+        showIdleState: function() {
+            this.hideStatus();
+            this.showProgress('');
+            this.menu.classList.remove('lisesca-open');
+            this.isMenuOpen = false;
+        },
+
+        // --- Configuration panel ---
+        configOverlay: null,
+
+        /**
+         * Create the configuration panel overlay.
+         */
+        createConfigPanel: function() {
+            this.configOverlay = document.createElement('div');
+            this.configOverlay.className = 'lisesca-config-overlay';
+
+            var panel = document.createElement('div');
+            panel.className = 'lisesca-config-panel';
+
+            var title = document.createElement('div');
+            title.className = 'lisesca-config-title';
+            title.textContent = 'LiSeSca Configuration';
+
+            var minRow = document.createElement('div');
+            minRow.className = 'lisesca-config-row';
+
+            var minLabel = document.createElement('label');
+            minLabel.textContent = 'Minimum page time (seconds):';
+            minLabel.htmlFor = 'lisesca-config-min';
+
+            var minInput = document.createElement('input');
+            minInput.type = 'number';
+            minInput.id = 'lisesca-config-min';
+            minInput.min = '5';
+            minInput.max = '30';
+            minInput.value = CONFIG.MIN_PAGE_TIME.toString();
+
+            minRow.appendChild(minLabel);
+            minRow.appendChild(minInput);
+
+            var maxRow = document.createElement('div');
+            maxRow.className = 'lisesca-config-row';
+
+            var maxLabel = document.createElement('label');
+            maxLabel.textContent = 'Maximum page time (seconds):';
+            maxLabel.htmlFor = 'lisesca-config-max';
+
+            var maxInput = document.createElement('input');
+            maxInput.type = 'number';
+            maxInput.id = 'lisesca-config-max';
+            maxInput.min = '15';
+            maxInput.max = '120';
+            maxInput.value = CONFIG.MAX_PAGE_TIME.toString();
+
+            maxRow.appendChild(maxLabel);
+            maxRow.appendChild(maxInput);
+
+            // --- Job timing section ---
+            var jobSectionLabel = document.createElement('div');
+            jobSectionLabel.className = 'lisesca-config-section';
+            jobSectionLabel.textContent = 'Job scraping timing';
+
+            var jobReviewMinRow = document.createElement('div');
+            jobReviewMinRow.className = 'lisesca-config-row';
+
+            var jobReviewMinLabel = document.createElement('label');
+            jobReviewMinLabel.textContent = 'Min job review time (seconds):';
+            jobReviewMinLabel.htmlFor = 'lisesca-config-job-review-min';
+
+            var jobReviewMinInput = document.createElement('input');
+            jobReviewMinInput.type = 'number';
+            jobReviewMinInput.id = 'lisesca-config-job-review-min';
+            jobReviewMinInput.min = '1';
+            jobReviewMinInput.max = '30';
+            jobReviewMinInput.value = CONFIG.MIN_JOB_REVIEW_TIME.toString();
+
+            jobReviewMinRow.appendChild(jobReviewMinLabel);
+            jobReviewMinRow.appendChild(jobReviewMinInput);
+
+            var jobReviewMaxRow = document.createElement('div');
+            jobReviewMaxRow.className = 'lisesca-config-row';
+
+            var jobReviewMaxLabel = document.createElement('label');
+            jobReviewMaxLabel.textContent = 'Max job review time (seconds):';
+            jobReviewMaxLabel.htmlFor = 'lisesca-config-job-review-max';
+
+            var jobReviewMaxInput = document.createElement('input');
+            jobReviewMaxInput.type = 'number';
+            jobReviewMaxInput.id = 'lisesca-config-job-review-max';
+            jobReviewMaxInput.min = '2';
+            jobReviewMaxInput.max = '60';
+            jobReviewMaxInput.value = CONFIG.MAX_JOB_REVIEW_TIME.toString();
+
+            jobReviewMaxRow.appendChild(jobReviewMaxLabel);
+            jobReviewMaxRow.appendChild(jobReviewMaxInput);
+
+            var jobPauseMinRow = document.createElement('div');
+            jobPauseMinRow.className = 'lisesca-config-row';
+
+            var jobPauseMinLabel = document.createElement('label');
+            jobPauseMinLabel.textContent = 'Min pause between jobs (seconds):';
+            jobPauseMinLabel.htmlFor = 'lisesca-config-job-pause-min';
+
+            var jobPauseMinInput = document.createElement('input');
+            jobPauseMinInput.type = 'number';
+            jobPauseMinInput.id = 'lisesca-config-job-pause-min';
+            jobPauseMinInput.min = '0';
+            jobPauseMinInput.max = '15';
+            jobPauseMinInput.value = CONFIG.MIN_JOB_PAUSE.toString();
+
+            jobPauseMinRow.appendChild(jobPauseMinLabel);
+            jobPauseMinRow.appendChild(jobPauseMinInput);
+
+            var jobPauseMaxRow = document.createElement('div');
+            jobPauseMaxRow.className = 'lisesca-config-row';
+
+            var jobPauseMaxLabel = document.createElement('label');
+            jobPauseMaxLabel.textContent = 'Max pause between jobs (seconds):';
+            jobPauseMaxLabel.htmlFor = 'lisesca-config-job-pause-max';
+
+            var jobPauseMaxInput = document.createElement('input');
+            jobPauseMaxInput.type = 'number';
+            jobPauseMaxInput.id = 'lisesca-config-job-pause-max';
+            jobPauseMaxInput.min = '1';
+            jobPauseMaxInput.max = '30';
+            jobPauseMaxInput.value = CONFIG.MAX_JOB_PAUSE.toString();
+
+            jobPauseMaxRow.appendChild(jobPauseMaxLabel);
+            jobPauseMaxRow.appendChild(jobPauseMaxInput);
+
+            var errorDiv = document.createElement('div');
+            errorDiv.className = 'lisesca-config-error';
+            errorDiv.id = 'lisesca-config-error';
+
+            var buttonsRow = document.createElement('div');
+            buttonsRow.className = 'lisesca-config-buttons';
+
+            var saveBtn = document.createElement('button');
+            saveBtn.className = 'lisesca-config-save';
+            saveBtn.textContent = 'Save';
+            saveBtn.addEventListener('click', function() {
+                UI.saveConfig();
+            });
+
+            var cancelBtn = document.createElement('button');
+            cancelBtn.className = 'lisesca-config-cancel';
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.addEventListener('click', function() {
+                UI.hideConfig();
+            });
+
+            buttonsRow.appendChild(saveBtn);
+            buttonsRow.appendChild(cancelBtn);
+
+            // --- Page timing section label ---
+            var pageSectionLabel = document.createElement('div');
+            pageSectionLabel.className = 'lisesca-config-section';
+            pageSectionLabel.textContent = 'Page scanning timing';
+
+            panel.appendChild(title);
+            panel.appendChild(pageSectionLabel);
+            panel.appendChild(minRow);
+            panel.appendChild(maxRow);
+            panel.appendChild(jobSectionLabel);
+            panel.appendChild(jobReviewMinRow);
+            panel.appendChild(jobReviewMaxRow);
+            panel.appendChild(jobPauseMinRow);
+            panel.appendChild(jobPauseMaxRow);
+            panel.appendChild(errorDiv);
+            panel.appendChild(buttonsRow);
+
+            this.configOverlay.appendChild(panel);
+
+            this.configOverlay.addEventListener('click', function(event) {
+                if (event.target === UI.configOverlay) {
+                    UI.hideConfig();
+                }
+            });
+
+            document.body.appendChild(this.configOverlay);
+        },
+
+        /**
+         * Show the configuration panel.
+         */
+        showConfig: function() {
+            document.getElementById('lisesca-config-min').value = CONFIG.MIN_PAGE_TIME.toString();
+            document.getElementById('lisesca-config-max').value = CONFIG.MAX_PAGE_TIME.toString();
+            document.getElementById('lisesca-config-job-review-min').value = CONFIG.MIN_JOB_REVIEW_TIME.toString();
+            document.getElementById('lisesca-config-job-review-max').value = CONFIG.MAX_JOB_REVIEW_TIME.toString();
+            document.getElementById('lisesca-config-job-pause-min').value = CONFIG.MIN_JOB_PAUSE.toString();
+            document.getElementById('lisesca-config-job-pause-max').value = CONFIG.MAX_JOB_PAUSE.toString();
+            document.getElementById('lisesca-config-error').textContent = '';
+            this.configOverlay.classList.add('lisesca-visible');
+        },
+
+        /**
+         * Hide the configuration panel.
+         */
+        hideConfig: function() {
+            this.configOverlay.classList.remove('lisesca-visible');
+        },
+
+        /**
+         * Validate and save configuration.
+         */
+        saveConfig: function() {
+            var errorDiv = document.getElementById('lisesca-config-error');
+
+            // --- Read all inputs ---
+            var minVal = parseInt(document.getElementById('lisesca-config-min').value, 10);
+            var maxVal = parseInt(document.getElementById('lisesca-config-max').value, 10);
+            var jobReviewMin = parseInt(document.getElementById('lisesca-config-job-review-min').value, 10);
+            var jobReviewMax = parseInt(document.getElementById('lisesca-config-job-review-max').value, 10);
+            var jobPauseMin = parseInt(document.getElementById('lisesca-config-job-pause-min').value, 10);
+            var jobPauseMax = parseInt(document.getElementById('lisesca-config-job-pause-max').value, 10);
+
+            // --- Validate all values ---
+            if (isNaN(minVal) || isNaN(maxVal) || isNaN(jobReviewMin)
+                || isNaN(jobReviewMax) || isNaN(jobPauseMin) || isNaN(jobPauseMax)) {
+                errorDiv.textContent = 'Please enter valid numbers in all fields.';
+                return;
+            }
+
+            // Page timing validation
+            if (minVal < 5 || minVal > 30) {
+                errorDiv.textContent = 'Min page time must be between 5 and 30 seconds.';
+                return;
+            }
+            if (maxVal < 15 || maxVal > 120) {
+                errorDiv.textContent = 'Max page time must be between 15 and 120 seconds.';
+                return;
+            }
+            if (maxVal <= minVal) {
+                errorDiv.textContent = 'Max page time must be greater than minimum.';
+                return;
+            }
+
+            // Job review timing validation
+            if (jobReviewMin < 1 || jobReviewMin > 30) {
+                errorDiv.textContent = 'Min job review time must be between 1 and 30 seconds.';
+                return;
+            }
+            if (jobReviewMax < 2 || jobReviewMax > 60) {
+                errorDiv.textContent = 'Max job review time must be between 2 and 60 seconds.';
+                return;
+            }
+            if (jobReviewMax <= jobReviewMin) {
+                errorDiv.textContent = 'Max job review time must be greater than minimum.';
+                return;
+            }
+
+            // Job pause validation
+            if (jobPauseMin < 0 || jobPauseMin > 15) {
+                errorDiv.textContent = 'Min job pause must be between 0 and 15 seconds.';
+                return;
+            }
+            if (jobPauseMax < 1 || jobPauseMax > 30) {
+                errorDiv.textContent = 'Max job pause must be between 1 and 30 seconds.';
+                return;
+            }
+            if (jobPauseMax <= jobPauseMin) {
+                errorDiv.textContent = 'Max job pause must be greater than minimum.';
+                return;
+            }
+
+            // --- Apply all values ---
+            CONFIG.MIN_PAGE_TIME = minVal;
+            CONFIG.MAX_PAGE_TIME = maxVal;
+            CONFIG.MIN_JOB_REVIEW_TIME = jobReviewMin;
+            CONFIG.MAX_JOB_REVIEW_TIME = jobReviewMax;
+            CONFIG.MIN_JOB_PAUSE = jobPauseMin;
+            CONFIG.MAX_JOB_PAUSE = jobPauseMax;
+            CONFIG.save();
+
+            console.log('[LiSeSca] Config updated:', {
+                pageTime: minVal + '-' + maxVal + 's',
+                jobReview: jobReviewMin + '-' + jobReviewMax + 's',
+                jobPause: jobPauseMin + '-' + jobPauseMax + 's'
+            });
+            this.hideConfig();
+        }
+    };
+
+    // ===== HUMAN EMULATION =====
+    // Simulates human browsing behavior (scrolling, mouse movement, pauses)
+    // to avoid triggering LinkedIn's bot detection.
+
+    const Emulator = {
+        /** Flag to allow cancellation of the emulation sequence */
+        cancelled: false,
+
+        /**
+         * Generate a random integer between min and max (inclusive).
+         * @param {number} min - Minimum value.
+         * @param {number} max - Maximum value.
+         * @returns {number} Random integer in [min, max].
+         */
+        getRandomInt: function(min, max) {
+            return Math.floor(Math.random() * (max - min + 1)) + min;
+        },
+
+        /**
+         * Return a Promise that resolves after a random delay.
+         * @param {number} minMs - Minimum milliseconds.
+         * @param {number} maxMs - Maximum milliseconds.
+         * @returns {Promise<void>}
+         */
+        randomDelay: function(minMs, maxMs) {
+            const delay = this.getRandomInt(minMs, maxMs);
+            return new Promise(function(resolve) {
+                setTimeout(resolve, delay);
+            });
+        },
+
+        /**
+         * Dispatch a synthetic mousemove event at randomized coordinates.
+         * @param {number} approximateY - Approximate vertical position to center the movement around.
+         */
+        dispatchMouseMove: function(approximateY) {
+            const eventInit = {
+                bubbles: true,
+                cancelable: true,
+                clientX: this.getRandomInt(200, 800),
+                clientY: approximateY + this.getRandomInt(-30, 30),
+                screenX: this.getRandomInt(200, 800),
+                screenY: approximateY + this.getRandomInt(-30, 30)
+            };
+            const event = new MouseEvent('mousemove', eventInit);
+
+            document.dispatchEvent(event);
+
+            if (document.body) {
+                document.body.dispatchEvent(new MouseEvent('mousemove', eventInit));
+            }
+            const mainEl = document.querySelector('main') || document.querySelector('[role="main"]');
+            if (mainEl) {
+                mainEl.dispatchEvent(new MouseEvent('mousemove', eventInit));
+            }
+        },
+
+        /**
+         * Dispatch a synthetic scroll event on all relevant scroll containers.
+         */
+        dispatchScrollEvent: function() {
+            window.dispatchEvent(new Event('scroll', { bubbles: true }));
+            document.dispatchEvent(new Event('scroll', { bubbles: true }));
+
+            const scrollTargets = [
+                document.querySelector('main'),
+                document.querySelector('[role="main"]'),
+                document.querySelector('[role="list"]')
+            ];
+            scrollTargets.forEach(function(target) {
+                if (target) {
+                    target.dispatchEvent(new Event('scroll', { bubbles: true }));
+                }
+            });
+        },
+
+        /**
+         * Run the full human emulation sequence for page scanning.
+         * @param {string} statusPrefix - Text to show before the countdown.
+         * @returns {Promise<void>} Resolves when emulation is complete.
+         */
+        emulateHumanScan: function(statusPrefix) {
+            this.cancelled = false;
+            const self = this;
+
+            const totalTimeMs = this.getRandomInt(
+                CONFIG.MIN_PAGE_TIME * 1000,
+                CONFIG.MAX_PAGE_TIME * 1000
+            );
+            const totalTimeSec = Math.round(totalTimeMs / 1000);
+
+            const pageHeight = document.documentElement.scrollHeight;
+            const viewportHeight = window.innerHeight;
+            const scrollableDistance = Math.max(pageHeight - viewportHeight, 0);
+
+            const averageStepMs = 450;
+            const numberOfSteps = Math.max(Math.floor(totalTimeMs / averageStepMs), 10);
+            const baseScrollPerStep = scrollableDistance / numberOfSteps;
+
+            const numberOfPauses = self.getRandomInt(2, 3);
+            const pauseSteps = new Set();
+            while (pauseSteps.size < numberOfPauses) {
+                pauseSteps.add(self.getRandomInt(2, numberOfSteps - 2));
+            }
+
+            console.log('[LiSeSca] Emulation: ' + numberOfSteps + ' steps over ~'
+                + totalTimeSec + 's, '
+                + numberOfPauses + ' reading pauses.');
+
+            const startTimeMs = Date.now();
+            const prefix = statusPrefix || 'Scanning';
+            UI.showStatus(prefix + ' — ' + totalTimeSec + 's remaining');
+
+            let currentScroll = 0;
+
+            /**
+             * Execute one scroll step, then schedule the next.
+             * @param {number} step - Current step index (0-based).
+             * @returns {Promise<void>}
+             */
+            function executeStep(step) {
+                if (self.cancelled) {
+                    console.log('[LiSeSca] Emulation cancelled.');
+                    return Promise.resolve();
+                }
+                if (step >= numberOfSteps) {
+                    window.scrollTo({ top: scrollableDistance, behavior: 'smooth' });
+                    self.dispatchScrollEvent();
+                    return Promise.resolve();
+                }
+
+                const elapsedMs = Date.now() - startTimeMs;
+                const remainingSec = Math.max(0, Math.round((totalTimeMs - elapsedMs) / 1000));
+                UI.showStatus(prefix + ' — ' + remainingSec + 's remaining');
+
+                const scrollAmount = baseScrollPerStep * (0.6 + Math.random() * 0.8);
+                currentScroll = Math.min(currentScroll + scrollAmount, scrollableDistance);
+                window.scrollTo({ top: currentScroll, behavior: 'smooth' });
+
+                self.dispatchScrollEvent();
+
+                const mouseY = self.getRandomInt(100, viewportHeight - 100);
+                self.dispatchMouseMove(mouseY);
+
+                let delayMin = 200;
+                let delayMax = 600;
+
+                if (pauseSteps.has(step)) {
+                    delayMin = 1000;
+                    delayMax = 3000;
+                }
+
+                return self.randomDelay(delayMin, delayMax).then(function() {
+                    return executeStep(step + 1);
+                });
+            }
+
+            return executeStep(0).then(function() {
+                console.log('[LiSeSca] Emulation complete.');
+            });
+        },
+
+        /**
+         * Cancel the ongoing emulation sequence.
+         */
+        cancel: function() {
+            this.cancelled = true;
+        }
+    };
+
+    // ===== CSS SELECTORS (PEOPLE SEARCH) =====
+    // Resilient selectors based on data attributes and ARIA roles,
+    // avoiding LinkedIn's generated CSS class names which change frequently.
+    const Selectors = {
+        RESULT_CARD: 'div[role="listitem"]',
+        TITLE_LINK: 'a[data-view-name="search-result-lockup-title"]'
+    };
 
     // ===== DATA EXTRACTION (PEOPLE) =====
     // Reads the current page's DOM and returns an array of profile objects.
     // Each profile is represented as:
     //   { fullName, connectionDegree, description, location, profileUrl }
+
     const Extractor = {
 
         /**
@@ -668,10 +1756,348 @@
         }
     };
 
+    // ===== PAGINATION (PEOPLE) =====
+    // Handles navigation between search result pages.
+    // LinkedIn uses the "page=" URL parameter for pagination.
+
+    const Paginator = {
+
+        /**
+         * Get the current page number from the URL's "page=" parameter.
+         * @returns {number} Page number (1 if not specified).
+         */
+        getCurrentPage: function() {
+            const url = new URL(window.location.href);
+            const pageParam = url.searchParams.get('page');
+            return pageParam ? parseInt(pageParam, 10) : 1;
+        },
+
+        /**
+         * Get the base search URL (without the "page" parameter).
+         * @returns {string} The cleaned base URL.
+         */
+        getBaseSearchUrl: function() {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('page');
+            return url.toString();
+        },
+
+        /**
+         * Navigate to a specific page by updating the URL.
+         * @param {number} pageNum - The page number to navigate to.
+         */
+        navigateToPage: function(pageNum) {
+            const baseUrl = State.get(State.KEYS.SEARCH_URL, this.getBaseSearchUrl());
+            const url = new URL(baseUrl);
+            url.searchParams.set('page', pageNum.toString());
+            const targetUrl = url.toString();
+
+            console.log('[LiSeSca] Navigating to page ' + pageNum + ': ' + targetUrl);
+            window.location.href = targetUrl;
+        }
+    };
+
+    // ===== OUTPUT GENERATION (PEOPLE) =====
+    // Formats scraped profile data into XLSX, CSV, and Markdown.
+
+    const Output = {
+
+        /**
+         * Format a single profile into Markdown.
+         * @param {Object} profile - A profile data object.
+         * @returns {string} The formatted Markdown block.
+         */
+        formatProfile: function(profile) {
+            const lines = [];
+            lines.push('# ' + profile.fullName);
+            lines.push('');
+
+            if (profile.connectionDegree === 0) {
+                lines.push('No connection.');
+            } else {
+                const ordinal = this.toOrdinal(profile.connectionDegree);
+                lines.push('Connection: ' + ordinal);
+            }
+
+            lines.push('Description: ' + (profile.description || '(none)'));
+            lines.push('Location: ' + (profile.location || '(none)'));
+            lines.push('Full profile URL: ' + (profile.profileUrl || '(none)'));
+
+            return lines.join('\n');
+        },
+
+        /**
+         * Convert a number to its ordinal string.
+         * @param {number} n - The number.
+         * @returns {string} The ordinal string.
+         */
+        toOrdinal: function(n) {
+            const suffixes = { 1: 'st', 2: 'nd', 3: 'rd' };
+            const lastTwo = n % 100;
+            if (lastTwo >= 11 && lastTwo <= 13) {
+                return n + 'th';
+            }
+            const lastDigit = n % 10;
+            return n + (suffixes[lastDigit] || 'th');
+        },
+
+        /**
+         * Generate a complete Markdown document from an array of profiles.
+         * @param {Array} profiles - Array of profile data objects.
+         * @returns {string} The complete Markdown content.
+         */
+        generateMarkdown: function(profiles) {
+            const blocks = profiles.map(function(profile) {
+                return Output.formatProfile(profile);
+            });
+            return blocks.join('\n\n---\n\n') + '\n';
+        },
+
+        COLUMN_HEADERS: ['Name', 'Title/Description', 'Location', 'LinkedIn URL', 'Connection degree'],
+
+        /**
+         * Convert a profile object into a row array.
+         * @param {Object} profile - A profile data object.
+         * @returns {Array<string|number>} Array of cell values.
+         */
+        profileToRow: function(profile) {
+            return [
+                profile.fullName || '',
+                profile.description || '',
+                profile.location || '',
+                profile.profileUrl || '',
+                profile.connectionDegree || 0
+            ];
+        },
+
+        /**
+         * Escape a value for CSV output (RFC 4180).
+         * @param {*} value - The cell value to escape.
+         * @returns {string} The CSV-safe string.
+         */
+        escapeCSVField: function(value) {
+            var str = String(value);
+            return '"' + str.replace(/"/g, '""') + '"';
+        },
+
+        /**
+         * Generate a CSV string from an array of profiles.
+         * @param {Array} profiles - Array of profile data objects.
+         * @returns {string} The complete CSV content.
+         */
+        generateCSV: function(profiles) {
+            var self = this;
+            var lines = [];
+
+            var headerLine = this.COLUMN_HEADERS.map(function(header) {
+                return self.escapeCSVField(header);
+            }).join(',');
+            lines.push(headerLine);
+
+            profiles.forEach(function(profile) {
+                var row = self.profileToRow(profile);
+                var csvLine = row.map(function(cell) {
+                    return self.escapeCSVField(cell);
+                }).join(',');
+                lines.push(csvLine);
+            });
+
+            return lines.join('\r\n') + '\r\n';
+        },
+
+        /**
+         * Generate an XLSX file as a Uint8Array.
+         * @param {Array} profiles - Array of profile data objects.
+         * @returns {Uint8Array} The binary XLSX file content.
+         */
+        generateXLSX: function(profiles) {
+            var self = this;
+            var data = [this.COLUMN_HEADERS];
+            profiles.forEach(function(profile) {
+                data.push(self.profileToRow(profile));
+            });
+
+            var worksheet = XLSX.utils.aoa_to_sheet(data);
+            var workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'LinkedIn Search');
+
+            var xlsxData = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+            return new Uint8Array(xlsxData);
+        },
+
+        /**
+         * Generate a filename based on the current date and time.
+         * @param {string} extension - File extension (default: 'md').
+         * @returns {string} The generated filename.
+         */
+        buildFilename: function(extension) {
+            var ext = extension || 'md';
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            return 'linkedin-search-' + year + '-' + month + '-' + day
+                + '-' + hours + 'h' + minutes + '.' + ext;
+        },
+
+        /**
+         * Trigger a file download in the browser.
+         * @param {string|Uint8Array} content - The file content.
+         * @param {string} filename - The desired filename.
+         * @param {string} mimeType - The MIME type for the Blob.
+         */
+        downloadFile: function(content, filename, mimeType) {
+            var type = mimeType || 'text/markdown;charset=utf-8';
+            const blob = new Blob([content], { type: type });
+            const url = URL.createObjectURL(blob);
+
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            link.style.display = 'none';
+
+            document.body.appendChild(link);
+            link.click();
+
+            setTimeout(function() {
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }, 1000);
+
+            console.log('[LiSeSca] File download triggered: ' + filename);
+        },
+
+        /**
+         * Generate output files in the selected formats and trigger downloads.
+         * @param {Array} profiles - Array of profile data objects.
+         */
+        downloadResults: function(profiles) {
+            if (!profiles || profiles.length === 0) {
+                console.warn('[LiSeSca] No profiles to download.');
+                return;
+            }
+
+            var formats = State.getFormats();
+            console.log('[LiSeSca] Downloading in formats: ' + formats.join(', '));
+
+            var self = this;
+            var delayMs = 0;
+
+            if (formats.indexOf('xlsx') !== -1) {
+                setTimeout(function() {
+                    var xlsxData = self.generateXLSX(profiles);
+                    var xlsxFilename = self.buildFilename('xlsx');
+                    self.downloadFile(
+                        xlsxData,
+                        xlsxFilename,
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    );
+                }, delayMs);
+                delayMs += 200;
+            }
+
+            if (formats.indexOf('csv') !== -1) {
+                setTimeout(function() {
+                    var csvContent = self.generateCSV(profiles);
+                    var csvFilename = self.buildFilename('csv');
+                    self.downloadFile(csvContent, csvFilename, 'text/csv;charset=utf-8');
+                }, delayMs);
+                delayMs += 200;
+            }
+
+            if (formats.indexOf('md') !== -1) {
+                setTimeout(function() {
+                    var markdown = self.generateMarkdown(profiles);
+                    var mdFilename = self.buildFilename('md');
+                    self.downloadFile(markdown, mdFilename, 'text/markdown;charset=utf-8');
+                }, delayMs);
+            }
+        }
+    };
+
+    // ===== TURNDOWN SERVICE =====
+    // Shared HTML-to-Markdown converter instance for job descriptions.
+    // Turndown is loaded via @require from CDN.
+    //
+    // IMPORTANT: LinkedIn enforces Trusted Types, a browser security policy
+    // that blocks direct innerHTML assignment. Turndown internally uses
+    // innerHTML when given an HTML string, which triggers a Trusted Types
+    // violation and crashes with "Cannot read properties of null ('firstChild')".
+    //
+    // To work around this, we use two strategies:
+    // 1. Pass live DOM nodes to Turndown (preferred — no innerHTML needed)
+    // 2. For HTML strings, use DOMParser to create a separate Document context
+    //    that is NOT subject to the page's Trusted Types policy, then pass
+    //    the parsed DOM node to Turndown.
+    var turndownService = null;
+
+    /**
+     * Get or create the shared TurndownService instance.
+     * Lazy initialization in case Turndown is loaded after our IIFE runs.
+     * @returns {TurndownService|null} The Turndown instance, or null if not available.
+     */
+    function getTurndownService() {
+        if (turndownService) {
+            return turndownService;
+        }
+        if (typeof TurndownService !== 'undefined') {
+            turndownService = new TurndownService({
+                headingStyle: 'atx',
+                bulletListMarker: '-'
+            });
+            return turndownService;
+        }
+        console.warn('[LiSeSca] TurndownService not available.');
+        return null;
+    }
+
+    /**
+     * Safely convert HTML to Markdown, bypassing LinkedIn's Trusted Types policy.
+     * Accepts either a DOM node or an HTML string.
+     *
+     * When given a DOM node: passes it directly to Turndown (no innerHTML involved).
+     * When given a string: uses DOMParser to build a DOM tree in a separate document
+     * context that is not subject to the page's Trusted Types restrictions, then
+     * passes the resulting node to Turndown.
+     *
+     * @param {HTMLElement|string} input - A live DOM element or an HTML string.
+     * @returns {string} The Markdown text, or plain text fallback, or empty string.
+     */
+    function htmlToMarkdown(input) {
+        if (!input) {
+            return '';
+        }
+
+        var td = getTurndownService();
+        if (!td) {
+            // Fallback: extract plain text if Turndown is not available
+            if (typeof input === 'string') {
+                var tempParser = new DOMParser();
+                var tempDoc = tempParser.parseFromString(input, 'text/html');
+                return (tempDoc.body.textContent || '').trim();
+            }
+            return (input.textContent || '').trim();
+        }
+
+        // If input is already a DOM node, pass it directly to Turndown
+        if (typeof input !== 'string') {
+            return td.turndown(input);
+        }
+
+        // For HTML strings, parse via DOMParser to avoid Trusted Types violations.
+        // DOMParser creates an entirely separate Document that does not inherit
+        // the page's Content Security Policy or Trusted Types restrictions.
+        var parser = new DOMParser();
+        var doc = parser.parseFromString(input, 'text/html');
+        return td.turndown(doc.body);
+    }
 
     // ===== JOB DATA EXTRACTION =====
     // Extracts job data from the left-panel cards and right-panel detail view.
     // The flow is: click a card → wait for detail panel → extract all fields.
+
     const JobExtractor = {
 
         /**
@@ -1250,7 +2676,7 @@
 
                 // Extract card basics first (some data is only in the card)
                 var card = document.querySelector('div[data-job-id="' + jobId + '"]');
-                var cardData = card ? self.extractCardBasics(card) : { jobId: jobId };
+                var cardData = card ? self.extractCardBasics(card) : { };
 
                 // Extract detail panel data
                 var detailTitle = self.extractDetailTitle();
@@ -1289,181 +2715,11 @@
         }
     };
 
-
-    // ===== HUMAN EMULATION =====
-    // Simulates human browsing behavior (scrolling, mouse movement, pauses)
-    // to avoid triggering LinkedIn's bot detection.
-    const Emulator = {
-        /** Flag to allow cancellation of the emulation sequence */
-        cancelled: false,
-
-        /**
-         * Generate a random integer between min and max (inclusive).
-         * @param {number} min - Minimum value.
-         * @param {number} max - Maximum value.
-         * @returns {number} Random integer in [min, max].
-         */
-        getRandomInt: function(min, max) {
-            return Math.floor(Math.random() * (max - min + 1)) + min;
-        },
-
-        /**
-         * Return a Promise that resolves after a random delay.
-         * @param {number} minMs - Minimum milliseconds.
-         * @param {number} maxMs - Maximum milliseconds.
-         * @returns {Promise<void>}
-         */
-        randomDelay: function(minMs, maxMs) {
-            const delay = this.getRandomInt(minMs, maxMs);
-            return new Promise(function(resolve) {
-                setTimeout(resolve, delay);
-            });
-        },
-
-        /**
-         * Dispatch a synthetic mousemove event at randomized coordinates.
-         * @param {number} approximateY - Approximate vertical position to center the movement around.
-         */
-        dispatchMouseMove: function(approximateY) {
-            const eventInit = {
-                bubbles: true,
-                cancelable: true,
-                clientX: this.getRandomInt(200, 800),
-                clientY: approximateY + this.getRandomInt(-30, 30),
-                screenX: this.getRandomInt(200, 800),
-                screenY: approximateY + this.getRandomInt(-30, 30)
-            };
-            const event = new MouseEvent('mousemove', eventInit);
-
-            document.dispatchEvent(event);
-
-            if (document.body) {
-                document.body.dispatchEvent(new MouseEvent('mousemove', eventInit));
-            }
-            const mainEl = document.querySelector('main') || document.querySelector('[role="main"]');
-            if (mainEl) {
-                mainEl.dispatchEvent(new MouseEvent('mousemove', eventInit));
-            }
-        },
-
-        /**
-         * Dispatch a synthetic scroll event on all relevant scroll containers.
-         */
-        dispatchScrollEvent: function() {
-            window.dispatchEvent(new Event('scroll', { bubbles: true }));
-            document.dispatchEvent(new Event('scroll', { bubbles: true }));
-
-            const scrollTargets = [
-                document.querySelector('main'),
-                document.querySelector('[role="main"]'),
-                document.querySelector('[role="list"]')
-            ];
-            scrollTargets.forEach(function(target) {
-                if (target) {
-                    target.dispatchEvent(new Event('scroll', { bubbles: true }));
-                }
-            });
-        },
-
-        /**
-         * Run the full human emulation sequence for page scanning.
-         * @param {string} statusPrefix - Text to show before the countdown.
-         * @returns {Promise<void>} Resolves when emulation is complete.
-         */
-        emulateHumanScan: function(statusPrefix) {
-            this.cancelled = false;
-            const self = this;
-
-            const totalTimeMs = this.getRandomInt(
-                CONFIG.MIN_PAGE_TIME * 1000,
-                CONFIG.MAX_PAGE_TIME * 1000
-            );
-            const totalTimeSec = Math.round(totalTimeMs / 1000);
-
-            const pageHeight = document.documentElement.scrollHeight;
-            const viewportHeight = window.innerHeight;
-            const scrollableDistance = Math.max(pageHeight - viewportHeight, 0);
-
-            const averageStepMs = 450;
-            const numberOfSteps = Math.max(Math.floor(totalTimeMs / averageStepMs), 10);
-            const baseScrollPerStep = scrollableDistance / numberOfSteps;
-
-            const numberOfPauses = self.getRandomInt(2, 3);
-            const pauseSteps = new Set();
-            while (pauseSteps.size < numberOfPauses) {
-                pauseSteps.add(self.getRandomInt(2, numberOfSteps - 2));
-            }
-
-            console.log('[LiSeSca] Emulation: ' + numberOfSteps + ' steps over ~'
-                + totalTimeSec + 's, '
-                + numberOfPauses + ' reading pauses.');
-
-            const startTimeMs = Date.now();
-            const prefix = statusPrefix || 'Scanning';
-            UI.showStatus(prefix + ' — ' + totalTimeSec + 's remaining');
-
-            let currentScroll = 0;
-
-            /**
-             * Execute one scroll step, then schedule the next.
-             * @param {number} step - Current step index (0-based).
-             * @returns {Promise<void>}
-             */
-            function executeStep(step) {
-                if (self.cancelled) {
-                    console.log('[LiSeSca] Emulation cancelled.');
-                    return Promise.resolve();
-                }
-                if (step >= numberOfSteps) {
-                    window.scrollTo({ top: scrollableDistance, behavior: 'smooth' });
-                    self.dispatchScrollEvent();
-                    return Promise.resolve();
-                }
-
-                const elapsedMs = Date.now() - startTimeMs;
-                const remainingSec = Math.max(0, Math.round((totalTimeMs - elapsedMs) / 1000));
-                UI.showStatus(prefix + ' — ' + remainingSec + 's remaining');
-
-                const scrollAmount = baseScrollPerStep * (0.6 + Math.random() * 0.8);
-                currentScroll = Math.min(currentScroll + scrollAmount, scrollableDistance);
-                window.scrollTo({ top: currentScroll, behavior: 'smooth' });
-
-                self.dispatchScrollEvent();
-
-                const mouseY = self.getRandomInt(100, viewportHeight - 100);
-                self.dispatchMouseMove(mouseY);
-
-                let delayMin = 200;
-                let delayMax = 600;
-
-                if (pauseSteps.has(step)) {
-                    delayMin = 1000;
-                    delayMax = 3000;
-                }
-
-                return self.randomDelay(delayMin, delayMax).then(function() {
-                    return executeStep(step + 1);
-                });
-            }
-
-            return executeStep(0).then(function() {
-                console.log('[LiSeSca] Emulation complete.');
-            });
-        },
-
-        /**
-         * Cancel the ongoing emulation sequence.
-         */
-        cancel: function() {
-            this.cancelled = true;
-        }
-    };
-
-
     // ===== JOB EMULATION =====
     // Simulates human browsing behavior specific to job detail panels.
     // When reviewing a job, a human would scroll the detail panel, move the mouse
     // over the description, and spend several seconds reading before moving on.
+
     const JobEmulator = {
         /** Flag to allow cancellation */
         cancelled: false,
@@ -1579,367 +2835,11 @@
         }
     };
 
-
-    // ===== PAGINATION (PEOPLE SEARCH) =====
-    // Handles navigation between search result pages by manipulating the URL.
-    const Paginator = {
-
-        /**
-         * Get the current page number from the URL.
-         * @returns {number} Current page number (1-based).
-         */
-        getCurrentPage: function() {
-            const url = new URL(window.location.href);
-            const pageParam = url.searchParams.get('page');
-            return pageParam ? parseInt(pageParam, 10) : 1;
-        },
-
-        /**
-         * Get the base search URL without the page parameter.
-         * @returns {string} The search URL with the page parameter removed.
-         */
-        getBaseSearchUrl: function() {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('page');
-            return url.toString();
-        },
-
-        /**
-         * Navigate to a specific page number by modifying the URL.
-         * @param {number} pageNum - The page number to navigate to.
-         */
-        navigateToPage: function(pageNum) {
-            const baseUrl = State.get(State.KEYS.SEARCH_URL, this.getBaseSearchUrl());
-            const url = new URL(baseUrl);
-            url.searchParams.set('page', pageNum.toString());
-            const targetUrl = url.toString();
-
-            console.log('[LiSeSca] Navigating to page ' + pageNum + ': ' + targetUrl);
-            window.location.href = targetUrl;
-        }
-    };
-
-
-    // ===== PAGINATION (JOBS) =====
-    // Handles navigation between job search result pages.
-    // Jobs use the "start=" parameter (increments by 25 per page).
-    const JobPaginator = {
-        /** Number of jobs per page on LinkedIn */
-        JOBS_PER_PAGE: 25,
-
-        /**
-         * Get the current "start" parameter value from the URL.
-         * @returns {number} The start offset (0-based), default 0.
-         */
-        getCurrentStartParam: function() {
-            var url = new URL(window.location.href);
-            var startParam = url.searchParams.get('start');
-            return startParam ? parseInt(startParam, 10) : 0;
-        },
-
-        /**
-         * Get the current logical page number (1-based) from the start parameter.
-         * @returns {number} Page number (1, 2, 3, ...).
-         */
-        getCurrentPage: function() {
-            return Math.floor(this.getCurrentStartParam() / this.JOBS_PER_PAGE) + 1;
-        },
-
-        /**
-         * Get the base search URL without the start parameter.
-         * @returns {string} The clean base URL.
-         */
-        getBaseSearchUrl: function() {
-            var url = new URL(window.location.href);
-            url.searchParams.delete('start');
-            return url.toString();
-        },
-
-        /**
-         * Check if pagination exists on the page.
-         * Collections/recommended pages may not have pagination.
-         * @returns {boolean}
-         */
-        hasPagination: function() {
-            return document.querySelector(JobSelectors.PAGINATION) !== null;
-        },
-
-        /**
-         * Get the total number of pages from the "Page X of Y" text.
-         * @returns {number} Total pages, or 0 if not found.
-         */
-        getTotalPages: function() {
-            var pageState = document.querySelector('.jobs-search-pagination__page-state');
-            if (pageState) {
-                var text = (pageState.textContent || '').trim();
-                var match = text.match(/Page\s+\d+\s+of\s+(\d+)/i);
-                if (match) {
-                    return parseInt(match[1], 10);
-                }
-            }
-            return 0;
-        },
-
-        /**
-         * Check if there is a next page available.
-         * Uses the "Page X of Y" indicator, falling back to checking
-         * if the current page is less than the detected total.
-         * @returns {boolean}
-         */
-        hasNextPage: function() {
-            var totalPages = this.getTotalPages();
-            if (totalPages > 0) {
-                return this.getCurrentPage() < totalPages;
-            }
-            // Fallback: check if a "Next" button exists and is not disabled
-            var nextBtn = document.querySelector('.jobs-search-pagination__button--next');
-            return nextBtn !== null && !nextBtn.disabled;
-        },
-
-        /**
-         * Navigate to a specific page by setting the start parameter.
-         * @param {number} pageNum - The page number (1-based) to navigate to.
-         */
-        navigateToPage: function(pageNum) {
-            var baseUrl = State.get(State.KEYS.SEARCH_URL, this.getBaseSearchUrl());
-            var url = new URL(baseUrl);
-            var startValue = (pageNum - 1) * this.JOBS_PER_PAGE;
-            if (startValue > 0) {
-                url.searchParams.set('start', startValue.toString());
-            }
-            var targetUrl = url.toString();
-
-            console.log('[LiSeSca] Navigating to jobs page ' + pageNum
-                + ' (start=' + startValue + '): ' + targetUrl);
-            window.location.href = targetUrl;
-        }
-    };
-
-
-    // ===== OUTPUT GENERATION (PEOPLE) =====
-    // Formats scraped profile data into XLSX, CSV, and Markdown.
-    const Output = {
-
-        /**
-         * Format a single profile into Markdown.
-         * @param {Object} profile - A profile data object.
-         * @returns {string} The formatted Markdown block.
-         */
-        formatProfile: function(profile) {
-            const lines = [];
-            lines.push('# ' + profile.fullName);
-            lines.push('');
-
-            if (profile.connectionDegree === 0) {
-                lines.push('No connection.');
-            } else {
-                const ordinal = this.toOrdinal(profile.connectionDegree);
-                lines.push('Connection: ' + ordinal);
-            }
-
-            lines.push('Description: ' + (profile.description || '(none)'));
-            lines.push('Location: ' + (profile.location || '(none)'));
-            lines.push('Full profile URL: ' + (profile.profileUrl || '(none)'));
-
-            return lines.join('\n');
-        },
-
-        /**
-         * Convert a number to its ordinal string.
-         * @param {number} n - The number.
-         * @returns {string} The ordinal string.
-         */
-        toOrdinal: function(n) {
-            const suffixes = { 1: 'st', 2: 'nd', 3: 'rd' };
-            const lastTwo = n % 100;
-            if (lastTwo >= 11 && lastTwo <= 13) {
-                return n + 'th';
-            }
-            const lastDigit = n % 10;
-            return n + (suffixes[lastDigit] || 'th');
-        },
-
-        /**
-         * Generate a complete Markdown document from an array of profiles.
-         * @param {Array} profiles - Array of profile data objects.
-         * @returns {string} The complete Markdown content.
-         */
-        generateMarkdown: function(profiles) {
-            const blocks = profiles.map(function(profile) {
-                return Output.formatProfile(profile);
-            });
-            return blocks.join('\n\n---\n\n') + '\n';
-        },
-
-        COLUMN_HEADERS: ['Name', 'Title/Description', 'Location', 'LinkedIn URL', 'Connection degree'],
-
-        /**
-         * Convert a profile object into a row array.
-         * @param {Object} profile - A profile data object.
-         * @returns {Array<string|number>} Array of cell values.
-         */
-        profileToRow: function(profile) {
-            return [
-                profile.fullName || '',
-                profile.description || '',
-                profile.location || '',
-                profile.profileUrl || '',
-                profile.connectionDegree || 0
-            ];
-        },
-
-        /**
-         * Escape a value for CSV output (RFC 4180).
-         * @param {*} value - The cell value to escape.
-         * @returns {string} The CSV-safe string.
-         */
-        escapeCSVField: function(value) {
-            var str = String(value);
-            return '"' + str.replace(/"/g, '""') + '"';
-        },
-
-        /**
-         * Generate a CSV string from an array of profiles.
-         * @param {Array} profiles - Array of profile data objects.
-         * @returns {string} The complete CSV content.
-         */
-        generateCSV: function(profiles) {
-            var self = this;
-            var lines = [];
-
-            var headerLine = this.COLUMN_HEADERS.map(function(header) {
-                return self.escapeCSVField(header);
-            }).join(',');
-            lines.push(headerLine);
-
-            profiles.forEach(function(profile) {
-                var row = self.profileToRow(profile);
-                var csvLine = row.map(function(cell) {
-                    return self.escapeCSVField(cell);
-                }).join(',');
-                lines.push(csvLine);
-            });
-
-            return lines.join('\r\n') + '\r\n';
-        },
-
-        /**
-         * Generate an XLSX file as a Uint8Array.
-         * @param {Array} profiles - Array of profile data objects.
-         * @returns {Uint8Array} The binary XLSX file content.
-         */
-        generateXLSX: function(profiles) {
-            var self = this;
-            var data = [this.COLUMN_HEADERS];
-            profiles.forEach(function(profile) {
-                data.push(self.profileToRow(profile));
-            });
-
-            var worksheet = XLSX.utils.aoa_to_sheet(data);
-            var workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, 'LinkedIn Search');
-
-            var xlsxData = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
-            return new Uint8Array(xlsxData);
-        },
-
-        /**
-         * Generate a filename based on the current date and time.
-         * @param {string} extension - File extension (default: 'md').
-         * @returns {string} The generated filename.
-         */
-        buildFilename: function(extension) {
-            var ext = extension || 'md';
-            const now = new Date();
-            const year = now.getFullYear();
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            const day = String(now.getDate()).padStart(2, '0');
-            const hours = String(now.getHours()).padStart(2, '0');
-            const minutes = String(now.getMinutes()).padStart(2, '0');
-            return 'linkedin-search-' + year + '-' + month + '-' + day
-                + '-' + hours + 'h' + minutes + '.' + ext;
-        },
-
-        /**
-         * Trigger a file download in the browser.
-         * @param {string|Uint8Array} content - The file content.
-         * @param {string} filename - The desired filename.
-         * @param {string} mimeType - The MIME type for the Blob.
-         */
-        downloadFile: function(content, filename, mimeType) {
-            var type = mimeType || 'text/markdown;charset=utf-8';
-            const blob = new Blob([content], { type: type });
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = filename;
-            link.style.display = 'none';
-
-            document.body.appendChild(link);
-            link.click();
-
-            setTimeout(function() {
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
-            }, 1000);
-
-            console.log('[LiSeSca] File download triggered: ' + filename);
-        },
-
-        /**
-         * Generate output files in the selected formats and trigger downloads.
-         * @param {Array} profiles - Array of profile data objects.
-         */
-        downloadResults: function(profiles) {
-            if (!profiles || profiles.length === 0) {
-                console.warn('[LiSeSca] No profiles to download.');
-                return;
-            }
-
-            var formats = State.getFormats();
-            console.log('[LiSeSca] Downloading in formats: ' + formats.join(', '));
-
-            var self = this;
-            var delayMs = 0;
-
-            if (formats.indexOf('xlsx') !== -1) {
-                setTimeout(function() {
-                    var xlsxData = self.generateXLSX(profiles);
-                    var xlsxFilename = self.buildFilename('xlsx');
-                    self.downloadFile(
-                        xlsxData,
-                        xlsxFilename,
-                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    );
-                }, delayMs);
-                delayMs += 200;
-            }
-
-            if (formats.indexOf('csv') !== -1) {
-                setTimeout(function() {
-                    var csvContent = self.generateCSV(profiles);
-                    var csvFilename = self.buildFilename('csv');
-                    self.downloadFile(csvContent, csvFilename, 'text/csv;charset=utf-8');
-                }, delayMs);
-                delayMs += 200;
-            }
-
-            if (formats.indexOf('md') !== -1) {
-                setTimeout(function() {
-                    var markdown = self.generateMarkdown(profiles);
-                    var mdFilename = self.buildFilename('md');
-                    self.downloadFile(markdown, mdFilename, 'text/markdown;charset=utf-8');
-                }, delayMs);
-            }
-        }
-    };
-
-
     // ===== OUTPUT GENERATION (JOBS) =====
     // Formats scraped job data into XLSX and Markdown.
     // CSV is not offered for jobs because job data contains long text fields
     // (descriptions, company info) that are poorly suited to CSV format.
+
     const JobOutput = {
 
         /** Column headers for XLSX export */
@@ -2158,1124 +3058,6 @@
         }
     };
 
-
-    // ===== USER INTERFACE =====
-    // Creates and manages the floating overlay panel with scrape controls.
-    // Adapts to the current page type: green SCRAPE button for people search,
-    // blue SCRAPE button for jobs search, with different page count options.
-    const UI = {
-        /** References to key DOM elements */
-        panel: null,
-        menu: null,
-        statusArea: null,
-        isMenuOpen: false,
-
-        /**
-         * Inject all LiSeSca styles into the page.
-         */
-        injectStyles: function() {
-            GM_addStyle(`
-                /* ---- LiSeSca floating panel ---- */
-                .lisesca-panel {
-                    position: fixed;
-                    top: 10px;
-                    right: 10px;
-                    z-index: 10000;
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    font-size: 13px;
-                    background: #1b1f23;
-                    color: #e1e4e8;
-                    border-radius: 8px;
-                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-                    padding: 0;
-                    min-width: 180px;
-                    user-select: none;
-                }
-
-                /* Top bar with SCRAPE button and gear icon */
-                .lisesca-topbar {
-                    display: flex;
-                    align-items: center;
-                    padding: 8px 10px;
-                    gap: 8px;
-                }
-
-                /* The main SCRAPE button — green for people, blue for jobs */
-                .lisesca-scrape-btn {
-                    flex: 1;
-                    background: #2ea44f;
-                    color: #ffffff;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 6px 14px;
-                    font-size: 13px;
-                    font-weight: 600;
-                    cursor: pointer;
-                    letter-spacing: 0.5px;
-                    transition: background 0.15s;
-                }
-                .lisesca-scrape-btn:hover {
-                    background: #3fb950;
-                }
-
-                /* Blue variant for jobs pages */
-                .lisesca-scrape-btn--jobs {
-                    background: #1f6feb;
-                }
-                .lisesca-scrape-btn--jobs:hover {
-                    background: #388bfd;
-                }
-
-                /* Gear (config) icon button */
-                .lisesca-gear-btn {
-                    background: none;
-                    border: none;
-                    color: #8b949e;
-                    cursor: pointer;
-                    font-size: 16px;
-                    padding: 4px;
-                    line-height: 1;
-                    transition: color 0.15s;
-                }
-                .lisesca-gear-btn:hover {
-                    color: #e1e4e8;
-                }
-
-                /* Dropdown menu (hidden by default) */
-                .lisesca-menu {
-                    display: none;
-                    padding: 8px 10px 10px;
-                    border-top: 1px solid #30363d;
-                }
-                .lisesca-menu.lisesca-open {
-                    display: block;
-                }
-
-                /* Label text above the dropdown */
-                .lisesca-menu-label {
-                    font-size: 11px;
-                    color: #8b949e;
-                    margin-bottom: 5px;
-                }
-
-                /* Page count selector dropdown */
-                .lisesca-select {
-                    width: 100%;
-                    background: #0d1117;
-                    color: #e1e4e8;
-                    border: 1px solid #30363d;
-                    border-radius: 4px;
-                    padding: 5px 8px;
-                    font-size: 13px;
-                    margin-bottom: 8px;
-                    cursor: pointer;
-                }
-                .lisesca-select:focus {
-                    outline: none;
-                    border-color: #58a6ff;
-                }
-
-                /* Format selection checkboxes */
-                .lisesca-fmt-label {
-                    font-size: 11px;
-                    color: #8b949e;
-                    margin-bottom: 5px;
-                    margin-top: 4px;
-                }
-
-                .lisesca-fmt-row {
-                    display: flex;
-                    gap: 10px;
-                    margin-bottom: 8px;
-                }
-
-                .lisesca-checkbox-label {
-                    display: flex;
-                    align-items: center;
-                    gap: 4px;
-                    font-size: 12px;
-                    color: #c9d1d9;
-                    cursor: pointer;
-                }
-
-                .lisesca-checkbox-label input[type="checkbox"] {
-                    -webkit-appearance: checkbox !important;
-                    appearance: checkbox !important;
-                    position: static !important;
-                    width: 14px !important;
-                    height: 14px !important;
-                    min-width: 14px !important;
-                    min-height: 14px !important;
-                    flex-shrink: 0 !important;
-                    accent-color: #58a6ff;
-                    cursor: pointer;
-                    margin: 0 2px 0 0 !important;
-                    padding: 0 !important;
-                    opacity: 1 !important;
-                }
-
-                /* GO button inside the dropdown */
-                .lisesca-go-btn {
-                    width: 100%;
-                    background: #1f6feb;
-                    color: #ffffff;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 6px 14px;
-                    font-size: 13px;
-                    font-weight: 600;
-                    cursor: pointer;
-                    transition: background 0.15s;
-                }
-                .lisesca-go-btn:hover {
-                    background: #388bfd;
-                }
-
-                /* Status display area (shown during scraping) */
-                .lisesca-status {
-                    display: none;
-                    padding: 8px 10px 10px;
-                    border-top: 1px solid #30363d;
-                    font-size: 12px;
-                    color: #8b949e;
-                }
-                .lisesca-status.lisesca-visible {
-                    display: block;
-                }
-
-                .lisesca-status-progress {
-                    display: none;
-                    margin-bottom: 4px;
-                }
-                .lisesca-status-progress.lisesca-visible {
-                    display: block;
-                }
-
-                /* Stop button (shown during scraping) */
-                .lisesca-stop-btn {
-                    width: 100%;
-                    background: #da3633;
-                    color: #ffffff;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 5px 12px;
-                    font-size: 12px;
-                    font-weight: 600;
-                    cursor: pointer;
-                    margin-top: 6px;
-                    transition: background 0.15s;
-                }
-                .lisesca-stop-btn:hover {
-                    background: #f85149;
-                }
-
-                /* ---- Configuration overlay ---- */
-                .lisesca-config-overlay {
-                    display: none;
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    width: 100%;
-                    height: 100%;
-                    background: rgba(0, 0, 0, 0.5);
-                    z-index: 10001;
-                    justify-content: center;
-                    align-items: center;
-                }
-                .lisesca-config-overlay.lisesca-visible {
-                    display: flex;
-                }
-
-                .lisesca-config-panel {
-                    background: #1b1f23;
-                    color: #e1e4e8;
-                    border-radius: 10px;
-                    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-                    padding: 20px 24px;
-                    min-width: 280px;
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    font-size: 13px;
-                }
-
-                .lisesca-config-title {
-                    font-size: 15px;
-                    font-weight: 600;
-                    margin-bottom: 16px;
-                    color: #f0f6fc;
-                }
-
-                .lisesca-config-section {
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: #8b949e;
-                    text-transform: uppercase;
-                    letter-spacing: 0.5px;
-                    margin-top: 14px;
-                    margin-bottom: 10px;
-                    padding-bottom: 4px;
-                    border-bottom: 1px solid #30363d;
-                }
-
-                .lisesca-config-row {
-                    margin-bottom: 12px;
-                }
-
-                .lisesca-config-row label {
-                    display: block;
-                    font-size: 11px;
-                    color: #8b949e;
-                    margin-bottom: 4px;
-                }
-
-                .lisesca-config-row input {
-                    width: 100%;
-                    background: #0d1117;
-                    color: #e1e4e8;
-                    border: 1px solid #30363d;
-                    border-radius: 4px;
-                    padding: 5px 8px;
-                    font-size: 13px;
-                    box-sizing: border-box;
-                }
-                .lisesca-config-row input:focus {
-                    outline: none;
-                    border-color: #58a6ff;
-                }
-
-                .lisesca-config-error {
-                    color: #f85149;
-                    font-size: 11px;
-                    margin-top: 4px;
-                    min-height: 16px;
-                }
-
-                .lisesca-config-buttons {
-                    display: flex;
-                    gap: 8px;
-                    margin-top: 16px;
-                }
-
-                .lisesca-config-save {
-                    flex: 1;
-                    background: #1f6feb;
-                    color: #ffffff;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 7px 14px;
-                    font-size: 13px;
-                    font-weight: 600;
-                    cursor: pointer;
-                    transition: background 0.15s;
-                }
-                .lisesca-config-save:hover {
-                    background: #388bfd;
-                }
-
-                .lisesca-config-cancel {
-                    flex: 1;
-                    background: #21262d;
-                    color: #c9d1d9;
-                    border: 1px solid #30363d;
-                    border-radius: 5px;
-                    padding: 7px 14px;
-                    font-size: 13px;
-                    font-weight: 600;
-                    cursor: pointer;
-                    transition: background 0.15s;
-                }
-                .lisesca-config-cancel:hover {
-                    background: #30363d;
-                }
-            `);
-        },
-
-        /**
-         * Build and inject the floating panel, adapting to the current page type.
-         * People search: green SCRAPE button, page options 1/10/50/All.
-         * Jobs search: blue SCRAPE button, page options 1/3/5/10.
-         */
-        createPanel: function() {
-            var pageType = PageDetector.getPageType();
-            var isJobs = (pageType === 'jobs');
-
-            // Create the main container
-            this.panel = document.createElement('div');
-            this.panel.className = 'lisesca-panel';
-
-            // --- Top bar ---
-            var topbar = document.createElement('div');
-            topbar.className = 'lisesca-topbar';
-
-            // SCRAPE button — color depends on page type
-            var scrapeBtn = document.createElement('button');
-            scrapeBtn.className = 'lisesca-scrape-btn' + (isJobs ? ' lisesca-scrape-btn--jobs' : '');
-            scrapeBtn.textContent = 'SCRAPE';
-            scrapeBtn.addEventListener('click', function() {
-                UI.toggleMenu();
-            });
-
-            // Gear icon — opens configuration
-            var gearBtn = document.createElement('button');
-            gearBtn.className = 'lisesca-gear-btn';
-            gearBtn.innerHTML = '&#9881;';
-            gearBtn.title = 'Configuration';
-            gearBtn.addEventListener('click', function() {
-                UI.showConfig();
-            });
-
-            topbar.appendChild(scrapeBtn);
-            topbar.appendChild(gearBtn);
-
-            // --- Dropdown menu ---
-            this.menu = document.createElement('div');
-            this.menu.className = 'lisesca-menu';
-
-            // "Pages to scrape" label
-            var label = document.createElement('div');
-            label.className = 'lisesca-menu-label';
-            label.textContent = 'Pages to scrape:';
-
-            // Page count selector — different options for people vs jobs
-            var select = document.createElement('select');
-            select.className = 'lisesca-select';
-            select.id = 'lisesca-page-select';
-
-            var options;
-            if (isJobs) {
-                // Try to read total results count from the page subtitle
-                var totalJobsText = '';
-                var subtitleEl = document.querySelector('.jobs-search-results-list__subtitle span');
-                var totalJobs = 0;
-                if (subtitleEl) {
-                    totalJobsText = (subtitleEl.textContent || '').trim();
-                    var match = totalJobsText.match(/^([\d,]+)\s+result/);
-                    if (match) {
-                        totalJobs = parseInt(match[1].replace(/,/g, ''), 10);
-                    }
-                }
-                var totalPages = totalJobs > 0
-                    ? Math.ceil(totalJobs / JobPaginator.JOBS_PER_PAGE)
-                    : 0;
-
-                // Build the "All" label with page count if available
-                var allLabel = 'All';
-                if (totalJobs > 0) {
-                    allLabel = 'All (' + totalPages + 'p)';
-                }
-
-                options = [
-                    { value: '1', text: '1' },
-                    { value: '3', text: '3' },
-                    { value: '5', text: '5' },
-                    { value: '10', text: '10' },
-                    { value: 'all', text: allLabel }
-                ];
-            } else {
-                options = [
-                    { value: '1', text: '1' },
-                    { value: '10', text: '10' },
-                    { value: '50', text: '50' },
-                    { value: 'all', text: 'All' }
-                ];
-            }
-            options.forEach(function(opt) {
-                var option = document.createElement('option');
-                option.value = opt.value;
-                option.textContent = opt.text;
-                select.appendChild(option);
-            });
-
-            // --- Format selection checkboxes ---
-            var fmtLabel = document.createElement('div');
-            fmtLabel.className = 'lisesca-fmt-label';
-            fmtLabel.textContent = 'Save as:';
-
-            var fmtRow = document.createElement('div');
-            fmtRow.className = 'lisesca-fmt-row';
-
-            // XLSX checkbox (checked by default)
-            var xlsxLabel = document.createElement('label');
-            xlsxLabel.className = 'lisesca-checkbox-label';
-            var xlsxCheck = document.createElement('input');
-            xlsxCheck.type = 'checkbox';
-            xlsxCheck.id = 'lisesca-fmt-xlsx';
-            xlsxCheck.checked = true;
-            xlsxLabel.appendChild(xlsxCheck);
-            xlsxLabel.appendChild(document.createTextNode('XLSX'));
-            fmtRow.appendChild(xlsxLabel);
-
-            // CSV checkbox — only for people search (not useful for jobs)
-            if (!isJobs) {
-                var csvLabel = document.createElement('label');
-                csvLabel.className = 'lisesca-checkbox-label';
-                var csvCheck = document.createElement('input');
-                csvCheck.type = 'checkbox';
-                csvCheck.id = 'lisesca-fmt-csv';
-                csvCheck.checked = false;
-                csvLabel.appendChild(csvCheck);
-                csvLabel.appendChild(document.createTextNode('CSV'));
-                fmtRow.appendChild(csvLabel);
-            }
-
-            // Markdown checkbox (unchecked by default)
-            var mdLabel = document.createElement('label');
-            mdLabel.className = 'lisesca-checkbox-label';
-            var mdCheck = document.createElement('input');
-            mdCheck.type = 'checkbox';
-            mdCheck.id = 'lisesca-fmt-md';
-            mdCheck.checked = false;
-            mdLabel.appendChild(mdCheck);
-            mdLabel.appendChild(document.createTextNode('Markdown'));
-            fmtRow.appendChild(mdLabel);
-
-            // GO button — dispatches to the correct controller
-            var goBtn = document.createElement('button');
-            goBtn.className = 'lisesca-go-btn';
-            goBtn.textContent = 'GO';
-            goBtn.addEventListener('click', function() {
-                var pageSelect = document.getElementById('lisesca-page-select');
-                var selectedValue = pageSelect.value;
-                console.log('[LiSeSca] GO pressed, pages=' + selectedValue + ', pageType=' + pageType);
-
-                if (isJobs) {
-                    JobController.startScraping(selectedValue);
-                } else {
-                    Controller.startScraping(selectedValue);
-                }
-            });
-
-            this.menu.appendChild(label);
-            this.menu.appendChild(select);
-            this.menu.appendChild(fmtLabel);
-            this.menu.appendChild(fmtRow);
-            this.menu.appendChild(goBtn);
-
-            // --- Status area ---
-            this.statusArea = document.createElement('div');
-            this.statusArea.className = 'lisesca-status';
-
-            var progressText = document.createElement('div');
-            progressText.id = 'lisesca-status-progress';
-            progressText.className = 'lisesca-status-progress';
-            progressText.textContent = '';
-
-            var statusText = document.createElement('div');
-            statusText.id = 'lisesca-status-text';
-            statusText.textContent = 'Initializing...';
-
-            var stopBtn = document.createElement('button');
-            stopBtn.className = 'lisesca-stop-btn';
-            stopBtn.textContent = 'STOP';
-            stopBtn.addEventListener('click', function() {
-                // Dispatch to the correct controller based on active scrape mode
-                var mode = State.getScrapeMode();
-                if (mode === 'jobs') {
-                    JobController.stopScraping();
-                } else {
-                    Controller.stopScraping();
-                }
-            });
-
-            this.statusArea.appendChild(progressText);
-            this.statusArea.appendChild(statusText);
-            this.statusArea.appendChild(stopBtn);
-
-            // --- Assemble panel ---
-            this.panel.appendChild(topbar);
-            this.panel.appendChild(this.menu);
-            this.panel.appendChild(this.statusArea);
-
-            document.body.appendChild(this.panel);
-            console.log('[LiSeSca] UI panel injected (' + pageType + ' mode).');
-        },
-
-        /**
-         * Toggle the dropdown menu open/closed.
-         */
-        toggleMenu: function() {
-            this.isMenuOpen = !this.isMenuOpen;
-            if (this.isMenuOpen) {
-                this.updateJobsAllLabel();
-                this.menu.classList.add('lisesca-open');
-            } else {
-                this.menu.classList.remove('lisesca-open');
-            }
-        },
-
-        /**
-         * Refresh the "All (Np)" label for jobs if total is known.
-         */
-        updateJobsAllLabel: function() {
-            if (!PageDetector.isOnJobsPage()) {
-                return;
-            }
-            var select = document.getElementById('lisesca-page-select');
-            if (!select) {
-                return;
-            }
-            var subtitleEl = document.querySelector('.jobs-search-results-list__subtitle span');
-            var totalJobs = 0;
-            if (subtitleEl) {
-                var totalJobsText = (subtitleEl.textContent || '').trim();
-                var match = totalJobsText.match(/^([\d,]+)\s+result/);
-                if (match) {
-                    totalJobs = parseInt(match[1].replace(/,/g, ''), 10);
-                }
-            }
-            var totalPages = totalJobs > 0
-                ? Math.ceil(totalJobs / JobPaginator.JOBS_PER_PAGE)
-                : 0;
-            var allLabel = (totalPages > 0) ? ('All (' + totalPages + 'p)') : 'All';
-            for (var i = 0; i < select.options.length; i += 1) {
-                if (select.options[i].value === 'all') {
-                    select.options[i].textContent = allLabel;
-                    break;
-                }
-            }
-        },
-
-        /**
-         * Show a status message in the status area.
-         * @param {string} message - The status text to display.
-         */
-        showStatus: function(message) {
-            this.menu.classList.remove('lisesca-open');
-            this.isMenuOpen = false;
-            this.statusArea.classList.add('lisesca-visible');
-            document.getElementById('lisesca-status-text').textContent = message;
-        },
-
-        /**
-         * Update the job progress line in the status area.
-         * @param {string} message - Progress text to display (empty to hide).
-         */
-        showProgress: function(message) {
-            var progressEl = document.getElementById('lisesca-status-progress');
-            if (!progressEl) {
-                return;
-            }
-            if (message) {
-                progressEl.textContent = message;
-                progressEl.classList.add('lisesca-visible');
-            } else {
-                progressEl.textContent = '';
-                progressEl.classList.remove('lisesca-visible');
-            }
-        },
-
-        /**
-         * Hide the status area.
-         */
-        hideStatus: function() {
-            this.statusArea.classList.remove('lisesca-visible');
-        },
-
-        /**
-         * Switch the panel into "idle" mode.
-         */
-        showIdleState: function() {
-            this.hideStatus();
-            this.showProgress('');
-            this.menu.classList.remove('lisesca-open');
-            this.isMenuOpen = false;
-        },
-
-        // --- Configuration panel ---
-        configOverlay: null,
-
-        /**
-         * Create the configuration panel overlay.
-         */
-        createConfigPanel: function() {
-            this.configOverlay = document.createElement('div');
-            this.configOverlay.className = 'lisesca-config-overlay';
-
-            var panel = document.createElement('div');
-            panel.className = 'lisesca-config-panel';
-
-            var title = document.createElement('div');
-            title.className = 'lisesca-config-title';
-            title.textContent = 'LiSeSca Configuration';
-
-            var minRow = document.createElement('div');
-            minRow.className = 'lisesca-config-row';
-
-            var minLabel = document.createElement('label');
-            minLabel.textContent = 'Minimum page time (seconds):';
-            minLabel.htmlFor = 'lisesca-config-min';
-
-            var minInput = document.createElement('input');
-            minInput.type = 'number';
-            minInput.id = 'lisesca-config-min';
-            minInput.min = '5';
-            minInput.max = '30';
-            minInput.value = CONFIG.MIN_PAGE_TIME.toString();
-
-            minRow.appendChild(minLabel);
-            minRow.appendChild(minInput);
-
-            var maxRow = document.createElement('div');
-            maxRow.className = 'lisesca-config-row';
-
-            var maxLabel = document.createElement('label');
-            maxLabel.textContent = 'Maximum page time (seconds):';
-            maxLabel.htmlFor = 'lisesca-config-max';
-
-            var maxInput = document.createElement('input');
-            maxInput.type = 'number';
-            maxInput.id = 'lisesca-config-max';
-            maxInput.min = '15';
-            maxInput.max = '120';
-            maxInput.value = CONFIG.MAX_PAGE_TIME.toString();
-
-            maxRow.appendChild(maxLabel);
-            maxRow.appendChild(maxInput);
-
-            // --- Job timing section ---
-            var jobSectionLabel = document.createElement('div');
-            jobSectionLabel.className = 'lisesca-config-section';
-            jobSectionLabel.textContent = 'Job scraping timing';
-
-            var jobReviewMinRow = document.createElement('div');
-            jobReviewMinRow.className = 'lisesca-config-row';
-
-            var jobReviewMinLabel = document.createElement('label');
-            jobReviewMinLabel.textContent = 'Min job review time (seconds):';
-            jobReviewMinLabel.htmlFor = 'lisesca-config-job-review-min';
-
-            var jobReviewMinInput = document.createElement('input');
-            jobReviewMinInput.type = 'number';
-            jobReviewMinInput.id = 'lisesca-config-job-review-min';
-            jobReviewMinInput.min = '1';
-            jobReviewMinInput.max = '30';
-            jobReviewMinInput.value = CONFIG.MIN_JOB_REVIEW_TIME.toString();
-
-            jobReviewMinRow.appendChild(jobReviewMinLabel);
-            jobReviewMinRow.appendChild(jobReviewMinInput);
-
-            var jobReviewMaxRow = document.createElement('div');
-            jobReviewMaxRow.className = 'lisesca-config-row';
-
-            var jobReviewMaxLabel = document.createElement('label');
-            jobReviewMaxLabel.textContent = 'Max job review time (seconds):';
-            jobReviewMaxLabel.htmlFor = 'lisesca-config-job-review-max';
-
-            var jobReviewMaxInput = document.createElement('input');
-            jobReviewMaxInput.type = 'number';
-            jobReviewMaxInput.id = 'lisesca-config-job-review-max';
-            jobReviewMaxInput.min = '2';
-            jobReviewMaxInput.max = '60';
-            jobReviewMaxInput.value = CONFIG.MAX_JOB_REVIEW_TIME.toString();
-
-            jobReviewMaxRow.appendChild(jobReviewMaxLabel);
-            jobReviewMaxRow.appendChild(jobReviewMaxInput);
-
-            var jobPauseMinRow = document.createElement('div');
-            jobPauseMinRow.className = 'lisesca-config-row';
-
-            var jobPauseMinLabel = document.createElement('label');
-            jobPauseMinLabel.textContent = 'Min pause between jobs (seconds):';
-            jobPauseMinLabel.htmlFor = 'lisesca-config-job-pause-min';
-
-            var jobPauseMinInput = document.createElement('input');
-            jobPauseMinInput.type = 'number';
-            jobPauseMinInput.id = 'lisesca-config-job-pause-min';
-            jobPauseMinInput.min = '0';
-            jobPauseMinInput.max = '15';
-            jobPauseMinInput.value = CONFIG.MIN_JOB_PAUSE.toString();
-
-            jobPauseMinRow.appendChild(jobPauseMinLabel);
-            jobPauseMinRow.appendChild(jobPauseMinInput);
-
-            var jobPauseMaxRow = document.createElement('div');
-            jobPauseMaxRow.className = 'lisesca-config-row';
-
-            var jobPauseMaxLabel = document.createElement('label');
-            jobPauseMaxLabel.textContent = 'Max pause between jobs (seconds):';
-            jobPauseMaxLabel.htmlFor = 'lisesca-config-job-pause-max';
-
-            var jobPauseMaxInput = document.createElement('input');
-            jobPauseMaxInput.type = 'number';
-            jobPauseMaxInput.id = 'lisesca-config-job-pause-max';
-            jobPauseMaxInput.min = '1';
-            jobPauseMaxInput.max = '30';
-            jobPauseMaxInput.value = CONFIG.MAX_JOB_PAUSE.toString();
-
-            jobPauseMaxRow.appendChild(jobPauseMaxLabel);
-            jobPauseMaxRow.appendChild(jobPauseMaxInput);
-
-            var errorDiv = document.createElement('div');
-            errorDiv.className = 'lisesca-config-error';
-            errorDiv.id = 'lisesca-config-error';
-
-            var buttonsRow = document.createElement('div');
-            buttonsRow.className = 'lisesca-config-buttons';
-
-            var saveBtn = document.createElement('button');
-            saveBtn.className = 'lisesca-config-save';
-            saveBtn.textContent = 'Save';
-            saveBtn.addEventListener('click', function() {
-                UI.saveConfig();
-            });
-
-            var cancelBtn = document.createElement('button');
-            cancelBtn.className = 'lisesca-config-cancel';
-            cancelBtn.textContent = 'Cancel';
-            cancelBtn.addEventListener('click', function() {
-                UI.hideConfig();
-            });
-
-            buttonsRow.appendChild(saveBtn);
-            buttonsRow.appendChild(cancelBtn);
-
-            // --- Page timing section label ---
-            var pageSectionLabel = document.createElement('div');
-            pageSectionLabel.className = 'lisesca-config-section';
-            pageSectionLabel.textContent = 'Page scanning timing';
-
-            panel.appendChild(title);
-            panel.appendChild(pageSectionLabel);
-            panel.appendChild(minRow);
-            panel.appendChild(maxRow);
-            panel.appendChild(jobSectionLabel);
-            panel.appendChild(jobReviewMinRow);
-            panel.appendChild(jobReviewMaxRow);
-            panel.appendChild(jobPauseMinRow);
-            panel.appendChild(jobPauseMaxRow);
-            panel.appendChild(errorDiv);
-            panel.appendChild(buttonsRow);
-
-            this.configOverlay.appendChild(panel);
-
-            this.configOverlay.addEventListener('click', function(event) {
-                if (event.target === UI.configOverlay) {
-                    UI.hideConfig();
-                }
-            });
-
-            document.body.appendChild(this.configOverlay);
-        },
-
-        /**
-         * Show the configuration panel.
-         */
-        showConfig: function() {
-            document.getElementById('lisesca-config-min').value = CONFIG.MIN_PAGE_TIME.toString();
-            document.getElementById('lisesca-config-max').value = CONFIG.MAX_PAGE_TIME.toString();
-            document.getElementById('lisesca-config-job-review-min').value = CONFIG.MIN_JOB_REVIEW_TIME.toString();
-            document.getElementById('lisesca-config-job-review-max').value = CONFIG.MAX_JOB_REVIEW_TIME.toString();
-            document.getElementById('lisesca-config-job-pause-min').value = CONFIG.MIN_JOB_PAUSE.toString();
-            document.getElementById('lisesca-config-job-pause-max').value = CONFIG.MAX_JOB_PAUSE.toString();
-            document.getElementById('lisesca-config-error').textContent = '';
-            this.configOverlay.classList.add('lisesca-visible');
-        },
-
-        /**
-         * Hide the configuration panel.
-         */
-        hideConfig: function() {
-            this.configOverlay.classList.remove('lisesca-visible');
-        },
-
-        /**
-         * Validate and save configuration.
-         */
-        saveConfig: function() {
-            var errorDiv = document.getElementById('lisesca-config-error');
-
-            // --- Read all inputs ---
-            var minVal = parseInt(document.getElementById('lisesca-config-min').value, 10);
-            var maxVal = parseInt(document.getElementById('lisesca-config-max').value, 10);
-            var jobReviewMin = parseInt(document.getElementById('lisesca-config-job-review-min').value, 10);
-            var jobReviewMax = parseInt(document.getElementById('lisesca-config-job-review-max').value, 10);
-            var jobPauseMin = parseInt(document.getElementById('lisesca-config-job-pause-min').value, 10);
-            var jobPauseMax = parseInt(document.getElementById('lisesca-config-job-pause-max').value, 10);
-
-            // --- Validate all values ---
-            if (isNaN(minVal) || isNaN(maxVal) || isNaN(jobReviewMin)
-                || isNaN(jobReviewMax) || isNaN(jobPauseMin) || isNaN(jobPauseMax)) {
-                errorDiv.textContent = 'Please enter valid numbers in all fields.';
-                return;
-            }
-
-            // Page timing validation
-            if (minVal < 5 || minVal > 30) {
-                errorDiv.textContent = 'Min page time must be between 5 and 30 seconds.';
-                return;
-            }
-            if (maxVal < 15 || maxVal > 120) {
-                errorDiv.textContent = 'Max page time must be between 15 and 120 seconds.';
-                return;
-            }
-            if (maxVal <= minVal) {
-                errorDiv.textContent = 'Max page time must be greater than minimum.';
-                return;
-            }
-
-            // Job review timing validation
-            if (jobReviewMin < 1 || jobReviewMin > 30) {
-                errorDiv.textContent = 'Min job review time must be between 1 and 30 seconds.';
-                return;
-            }
-            if (jobReviewMax < 2 || jobReviewMax > 60) {
-                errorDiv.textContent = 'Max job review time must be between 2 and 60 seconds.';
-                return;
-            }
-            if (jobReviewMax <= jobReviewMin) {
-                errorDiv.textContent = 'Max job review time must be greater than minimum.';
-                return;
-            }
-
-            // Job pause validation
-            if (jobPauseMin < 0 || jobPauseMin > 15) {
-                errorDiv.textContent = 'Min job pause must be between 0 and 15 seconds.';
-                return;
-            }
-            if (jobPauseMax < 1 || jobPauseMax > 30) {
-                errorDiv.textContent = 'Max job pause must be between 1 and 30 seconds.';
-                return;
-            }
-            if (jobPauseMax <= jobPauseMin) {
-                errorDiv.textContent = 'Max job pause must be greater than minimum.';
-                return;
-            }
-
-            // --- Apply all values ---
-            CONFIG.MIN_PAGE_TIME = minVal;
-            CONFIG.MAX_PAGE_TIME = maxVal;
-            CONFIG.MIN_JOB_REVIEW_TIME = jobReviewMin;
-            CONFIG.MAX_JOB_REVIEW_TIME = jobReviewMax;
-            CONFIG.MIN_JOB_PAUSE = jobPauseMin;
-            CONFIG.MAX_JOB_PAUSE = jobPauseMax;
-            CONFIG.save();
-
-            console.log('[LiSeSca] Config updated:', {
-                pageTime: minVal + '-' + maxVal + 's',
-                jobReview: jobReviewMin + '-' + jobReviewMax + 's',
-                jobPause: jobPauseMin + '-' + jobPauseMax + 's'
-            });
-            this.hideConfig();
-        }
-    };
-
-
-    // ===== MAIN CONTROLLER (PEOPLE SEARCH) =====
-    // Orchestrates the people search scraping lifecycle.
-    const Controller = {
-
-        /**
-         * Initialize the script. Called once on every page load.
-         * Dispatches to the correct controller based on page type and scrape mode.
-         */
-        init: function() {
-            console.log('[LiSeSca] v' + CONFIG.VERSION + ' initializing...');
-
-            CONFIG.load();
-
-            UI.injectStyles();
-            UI.createPanel();
-            UI.createConfigPanel();
-
-            // Check if we have an active scraping session to resume
-            if (State.isScraping()) {
-                var mode = State.getScrapeMode();
-                if (mode === 'jobs') {
-                    JobController.resumeScraping();
-                } else {
-                    this.resumeScraping();
-                }
-            } else {
-                console.log('[LiSeSca] Ready. Click SCRAPE to begin.');
-            }
-        },
-
-        /**
-         * Resume an active people scraping session after a page reload.
-         */
-        resumeScraping: function() {
-            if (!PageDetector.isOnPeopleSearchPage()) {
-                console.warn('[LiSeSca] Resumed on wrong page. Finishing session with buffered data.');
-                UI.showStatus('Wrong page detected. Saving collected data...');
-                var buffer = State.getBuffer();
-                if (buffer.length > 0) {
-                    Output.downloadResults(buffer);
-                }
-                State.clear();
-                setTimeout(function() {
-                    UI.showIdleState();
-                }, 3000);
-                return;
-            }
-
-            var state = State.getScrapingState();
-            var pagesScraped = state.currentPage - state.startPage;
-            console.log('[LiSeSca] Resuming people scraping. Page '
-                + state.currentPage + ', ' + pagesScraped + ' pages done, '
-                + state.scrapedBuffer.length + ' profiles buffered.');
-
-            this.scrapeCycle();
-        },
-
-        /**
-         * Start a new people scraping session.
-         * @param {string} pageCount - Number of pages ('1', '10', '50', 'all').
-         */
-        startScraping: function(pageCount) {
-            if (!PageDetector.isOnPeopleSearchPage()) {
-                console.warn('[LiSeSca] Not on a people search page. Scraping aborted.');
-                UI.showStatus('Wrong page — navigate to People search first.');
-                setTimeout(function() {
-                    UI.showIdleState();
-                }, 3000);
-                return;
-            }
-
-            var target = (pageCount === 'all') ? 9999 : parseInt(pageCount, 10);
-            var startPage = Paginator.getCurrentPage();
-            var baseUrl = Paginator.getBaseSearchUrl();
-
-            console.log('[LiSeSca] Starting people scrape: target=' + target
-                + ' pages, starting at page ' + startPage);
-
-            var selectedFormats = State.readFormatsFromUI();
-            if (selectedFormats.length === 0) {
-                selectedFormats = ['xlsx'];
-            }
-
-            State.startSession(target, startPage, baseUrl, 'people');
-            State.saveFormats(selectedFormats);
-
-            this.scrapeCycle();
-        },
-
-        /**
-         * The core scraping cycle. Runs once per page.
-         */
-        scrapeCycle: function() {
-            var state = State.getScrapingState();
-            var pagesScraped = state.currentPage - state.startPage;
-            var targetDisplay = (state.targetPageCount >= 9999)
-                ? 'all' : state.targetPageCount.toString();
-
-            var statusPrefix = 'Scanning page ' + state.currentPage
-                + ' (' + (pagesScraped + 1) + ' of ' + targetDisplay + ')';
-
-            var self = this;
-
-            Emulator.emulateHumanScan(statusPrefix).then(function() {
-                if (!State.isScraping()) {
-                    console.log('[LiSeSca] Scraping was stopped during emulation.');
-                    return;
-                }
-
-                UI.showStatus('Extracting page ' + state.currentPage + '...');
-                return Extractor.extractCurrentPage();
-            }).then(function(profiles) {
-                if (!profiles) {
-                    return;
-                }
-
-                console.log('[LiSeSca] Page ' + state.currentPage
-                    + ': extracted ' + profiles.length + ' profiles.');
-
-                if (profiles.length > 0) {
-                    console.table(profiles.map(function(p) {
-                        return {
-                            name: p.fullName,
-                            degree: p.connectionDegree,
-                            description: p.description.substring(0, 50),
-                            location: p.location
-                        };
-                    }));
-                }
-
-                State.appendBuffer(profiles);
-                self.decideNextAction(profiles.length);
-
-            }).catch(function(error) {
-                console.error('[LiSeSca] Scrape cycle error:', error);
-                UI.showStatus('Error: ' + error.message);
-
-                var buffer = State.getBuffer();
-                if (buffer.length > 0) {
-                    Output.downloadResults(buffer);
-                }
-                State.clear();
-                setTimeout(function() {
-                    UI.showIdleState();
-                }, 5000);
-            });
-        },
-
-        /**
-         * Decide next action after extracting a page.
-         * @param {number} profilesOnThisPage - Number of profiles extracted.
-         */
-        decideNextAction: function(profilesOnThisPage) {
-            var state = State.getScrapingState();
-            var pagesScraped = state.currentPage - state.startPage + 1;
-
-            if (profilesOnThisPage === 0) {
-                console.log('[LiSeSca] No results on page ' + state.currentPage + '. End of results.');
-                this.finishScraping();
-                return;
-            }
-
-            if (pagesScraped >= state.targetPageCount) {
-                console.log('[LiSeSca] Reached target of ' + state.targetPageCount + ' pages.');
-                this.finishScraping();
-                return;
-            }
-
-            if (!State.isScraping()) {
-                console.log('[LiSeSca] Scraping stopped by user.');
-                this.finishScraping();
-                return;
-            }
-
-            State.advancePage();
-            var nextPage = State.get(State.KEYS.CURRENT_PAGE, 1);
-            UI.showStatus('Moving to page ' + nextPage + '...');
-
-            setTimeout(function() {
-                Paginator.navigateToPage(nextPage);
-            }, Emulator.getRandomInt(1000, 2500));
-        },
-
-        /**
-         * Complete the scraping session.
-         */
-        finishScraping: function() {
-            var buffer = State.getBuffer();
-            var totalProfiles = buffer.length;
-
-            console.log('[LiSeSca] Scraping finished! Total: ' + totalProfiles + ' profiles.');
-
-            if (totalProfiles > 0) {
-                UI.showStatus('Done! ' + totalProfiles + ' profiles scraped. Downloading...');
-                Output.downloadResults(buffer);
-            } else {
-                UI.showStatus('No profiles found.');
-            }
-
-            State.clear();
-            setTimeout(function() {
-                UI.showIdleState();
-            }, 5000);
-        },
-
-        /**
-         * Stop scraping (STOP button handler).
-         */
-        stopScraping: function() {
-            console.log('[LiSeSca] Scraping stopped by user.');
-            Emulator.cancel();
-            State.set(State.KEYS.IS_SCRAPING, false);
-            this.finishScraping();
-        }
-    };
-
-
     // ===== JOB CONTROLLER =====
     // Orchestrates the job scraping lifecycle.
     // Unlike people search (which extracts all cards on a page at once),
@@ -3288,6 +3070,7 @@
     //       If jobIndex < total jobs on page → resume scrapeNextJob()
     //       If all jobs done → decideNextAction() (next page or finish)
     //     NO → Check scrapeMode == 'people'? → existing Controller
+
     const JobController = {
 
         /**
@@ -3593,8 +3376,230 @@
         }
     };
 
+    // ===== MAIN CONTROLLER (PEOPLE SEARCH) =====
+    // Orchestrates the people search scraping lifecycle.
+
+    const Controller = {
+
+        /**
+         * Initialize the script. Called once on every page load.
+         * Dispatches to the correct controller based on page type and scrape mode.
+         */
+        init: function() {
+            console.log('[LiSeSca] v' + CONFIG.VERSION + ' initializing...');
+
+            // Wire up the UI with controller references to avoid circular import issues
+            setControllers(Controller, JobController);
+
+            CONFIG.load();
+
+            UI.injectStyles();
+            UI.createPanel();
+            UI.createConfigPanel();
+
+            // Check if we have an active scraping session to resume
+            if (State.isScraping()) {
+                var mode = State.getScrapeMode();
+                if (mode === 'jobs') {
+                    JobController.resumeScraping();
+                } else {
+                    this.resumeScraping();
+                }
+            } else {
+                console.log('[LiSeSca] Ready. Click SCRAPE to begin.');
+            }
+        },
+
+        /**
+         * Resume an active people scraping session after a page reload.
+         */
+        resumeScraping: function() {
+            if (!PageDetector.isOnPeopleSearchPage()) {
+                console.warn('[LiSeSca] Resumed on wrong page. Finishing session with buffered data.');
+                UI.showStatus('Wrong page detected. Saving collected data...');
+                var buffer = State.getBuffer();
+                if (buffer.length > 0) {
+                    Output.downloadResults(buffer);
+                }
+                State.clear();
+                setTimeout(function() {
+                    UI.showIdleState();
+                }, 3000);
+                return;
+            }
+
+            var state = State.getScrapingState();
+            var pagesScraped = state.currentPage - state.startPage;
+            console.log('[LiSeSca] Resuming people scraping. Page '
+                + state.currentPage + ', ' + pagesScraped + ' pages done, '
+                + state.scrapedBuffer.length + ' profiles buffered.');
+
+            this.scrapeCycle();
+        },
+
+        /**
+         * Start a new people scraping session.
+         * @param {string} pageCount - Number of pages ('1', '10', '50', 'all').
+         */
+        startScraping: function(pageCount) {
+            if (!PageDetector.isOnPeopleSearchPage()) {
+                console.warn('[LiSeSca] Not on a people search page. Scraping aborted.');
+                UI.showStatus('Wrong page — navigate to People search first.');
+                setTimeout(function() {
+                    UI.showIdleState();
+                }, 3000);
+                return;
+            }
+
+            var target = (pageCount === 'all') ? 9999 : parseInt(pageCount, 10);
+            var startPage = Paginator.getCurrentPage();
+            var baseUrl = Paginator.getBaseSearchUrl();
+
+            console.log('[LiSeSca] Starting people scrape: target=' + target
+                + ' pages, starting at page ' + startPage);
+
+            var selectedFormats = State.readFormatsFromUI();
+            if (selectedFormats.length === 0) {
+                selectedFormats = ['xlsx'];
+            }
+
+            State.startSession(target, startPage, baseUrl, 'people');
+            State.saveFormats(selectedFormats);
+
+            this.scrapeCycle();
+        },
+
+        /**
+         * The core scraping cycle. Runs once per page.
+         */
+        scrapeCycle: function() {
+            var state = State.getScrapingState();
+            var pagesScraped = state.currentPage - state.startPage;
+            var targetDisplay = (state.targetPageCount >= 9999)
+                ? 'all' : state.targetPageCount.toString();
+
+            var statusPrefix = 'Scanning page ' + state.currentPage
+                + ' (' + (pagesScraped + 1) + ' of ' + targetDisplay + ')';
+
+            var self = this;
+
+            Emulator.emulateHumanScan(statusPrefix).then(function() {
+                if (!State.isScraping()) {
+                    console.log('[LiSeSca] Scraping was stopped during emulation.');
+                    return;
+                }
+
+                UI.showStatus('Extracting page ' + state.currentPage + '...');
+                return Extractor.extractCurrentPage();
+            }).then(function(profiles) {
+                if (!profiles) {
+                    return;
+                }
+
+                console.log('[LiSeSca] Page ' + state.currentPage
+                    + ': extracted ' + profiles.length + ' profiles.');
+
+                if (profiles.length > 0) {
+                    console.table(profiles.map(function(p) {
+                        return {
+                            name: p.fullName,
+                            degree: p.connectionDegree,
+                            description: p.description.substring(0, 50),
+                            location: p.location
+                        };
+                    }));
+                }
+
+                State.appendBuffer(profiles);
+                self.decideNextAction(profiles.length);
+
+            }).catch(function(error) {
+                console.error('[LiSeSca] Scrape cycle error:', error);
+                UI.showStatus('Error: ' + error.message);
+
+                var buffer = State.getBuffer();
+                if (buffer.length > 0) {
+                    Output.downloadResults(buffer);
+                }
+                State.clear();
+                setTimeout(function() {
+                    UI.showIdleState();
+                }, 5000);
+            });
+        },
+
+        /**
+         * Decide next action after extracting a page.
+         * @param {number} profilesOnThisPage - Number of profiles extracted.
+         */
+        decideNextAction: function(profilesOnThisPage) {
+            var state = State.getScrapingState();
+            var pagesScraped = state.currentPage - state.startPage + 1;
+
+            if (profilesOnThisPage === 0) {
+                console.log('[LiSeSca] No results on page ' + state.currentPage + '. End of results.');
+                this.finishScraping();
+                return;
+            }
+
+            if (pagesScraped >= state.targetPageCount) {
+                console.log('[LiSeSca] Reached target of ' + state.targetPageCount + ' pages.');
+                this.finishScraping();
+                return;
+            }
+
+            if (!State.isScraping()) {
+                console.log('[LiSeSca] Scraping stopped by user.');
+                this.finishScraping();
+                return;
+            }
+
+            State.advancePage();
+            var nextPage = State.get(State.KEYS.CURRENT_PAGE, 1);
+            UI.showStatus('Moving to page ' + nextPage + '...');
+
+            setTimeout(function() {
+                Paginator.navigateToPage(nextPage);
+            }, Emulator.getRandomInt(1000, 2500));
+        },
+
+        /**
+         * Complete the scraping session.
+         */
+        finishScraping: function() {
+            var buffer = State.getBuffer();
+            var totalProfiles = buffer.length;
+
+            console.log('[LiSeSca] Scraping finished! Total: ' + totalProfiles + ' profiles.');
+
+            if (totalProfiles > 0) {
+                UI.showStatus('Done! ' + totalProfiles + ' profiles scraped. Downloading...');
+                Output.downloadResults(buffer);
+            } else {
+                UI.showStatus('No profiles found.');
+            }
+
+            State.clear();
+            setTimeout(function() {
+                UI.showIdleState();
+            }, 5000);
+        },
+
+        /**
+         * Stop scraping (STOP button handler).
+         */
+        stopScraping: function() {
+            console.log('[LiSeSca] Scraping stopped by user.');
+            Emulator.cancel();
+            State.set(State.KEYS.IS_SCRAPING, false);
+            this.finishScraping();
+        }
+    };
 
     // ===== ENTRY POINT =====
+    // Main entry for the LiSeSca userscript.
+    // Imports all modules and initializes the controller.
+
     Controller.init();
 
 })();

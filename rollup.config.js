@@ -1,4 +1,7 @@
-// ==UserScript==
+// Rollup configuration for LiSeSca userscript
+// Bundles ES modules into a single IIFE for Tampermonkey
+
+const banner = `// ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
 // @version      0.3.8
@@ -15,3 +18,15 @@
 // @require      https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js
 // @run-at       document-idle
 // ==/UserScript==
+`;
+
+export default {
+    input: 'src/index.js',
+    output: {
+        file: 'lisesca.user.js',
+        format: 'iife',
+        banner: banner,
+        indent: '    ',
+        strict: true
+    }
+};

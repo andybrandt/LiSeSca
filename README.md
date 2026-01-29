@@ -35,6 +35,17 @@ By default, Tampermonkey only allows scripts installed from its online repositor
 3. Tampermonkey should automatically detect the userscript and offer to install it. Click **Install**.
 4. Alternatively, open the Tampermonkey Dashboard, go to the **Utilities** tab, and paste the URL to the raw script file under **Install from URL**.
 
+## Building from Source
+
+The source code is split into ES modules under `src/` and bundled using [Rollup](https://rollupjs.org/).
+
+```bash
+npm install        # Install dependencies (first time only)
+npm run build      # Bundle into lisesca.user.js
+```
+
+The build output is `lisesca.user.js` in the project root.
+
 ## Usage
 
 1. Navigate to a LinkedIn **People Search** page (`linkedin.com/search/results/people/...`) or a **Jobs Search** page (`linkedin.com/jobs/search/...` or `linkedin.com/jobs/collections/...`).
