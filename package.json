@@ -1,0 +1,11 @@
+{
+  "name": "lisesca",
+  "version": "0.3.8",
+  "description": "LinkedIn Search Scraper - Tampermonkey userscript",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "verify": "diff lisesca.user.js lisesca.user.js-reference && echo 'PASS: byte-for-byte match'"
+  },
+  "type": "module",
+  "private": true
+}
