@@ -94,11 +94,17 @@ export const Controller = {
 
         // We're on a supported page now
         // Wait a bit for LinkedIn to render the new page content
-        var self = this;
         setTimeout(function() {
             // Rebuild the panel (handles color change between people/jobs)
             UI.rebuildPanel();
             console.log('[LiSeSca] Ready on ' + newPageType + ' page.');
+
+            // For jobs pages, update the "All (Np)" label after LinkedIn populates the results count
+            if (newPageType === 'jobs') {
+                setTimeout(function() {
+                    UI.updateJobsAllLabel();
+                }, 1000);
+            }
         }, 500);
     },
 

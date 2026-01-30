@@ -1,9 +1,12 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.9
+// @version      0.3.10
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
+// @homepageURL  https://github.com/andybrandt/LiSeSca
+// @updateURL    https://github.com/andybrandt/LiSeSca/raw/refs/heads/master/lisesca.user.js
+// @downloadURL  https://github.com/andybrandt/LiSeSca/raw/refs/heads/master/lisesca.user.js
 // @match        https://www.linkedin.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -21,7 +24,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.3.9',
+        VERSION: '0.3.10',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -3611,10 +3614,20 @@
                 }
                 return;
             }
+
+            // We're on a supported page now
+            // Wait a bit for LinkedIn to render the new page content
             setTimeout(function() {
                 // Rebuild the panel (handles color change between people/jobs)
                 UI.rebuildPanel();
                 console.log('[LiSeSca] Ready on ' + newPageType + ' page.');
+
+                // For jobs pages, update the "All (Np)" label after LinkedIn populates the results count
+                if (newPageType === 'jobs') {
+                    setTimeout(function() {
+                        UI.updateJobsAllLabel();
+                    }, 1000);
+                }
             }, 500);
         },
 
