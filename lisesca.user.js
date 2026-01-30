@@ -1,12 +1,10 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.8
+// @version      0.3.9
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
-// @match        https://www.linkedin.com/search/results/people/*
-// @match        https://www.linkedin.com/jobs/search/*
-// @match        https://www.linkedin.com/jobs/collections/*
+// @match        https://www.linkedin.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
@@ -23,7 +21,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.3.0',
+        VERSION: '0.3.9',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -338,6 +336,104 @@
         }
     };
 
+    // ===== SPA NAVIGATION HANDLER =====
+    // Detects URL changes in LinkedIn's SPA by intercepting History API.
+    // Calls a callback when navigation occurs so the UI can be rebuilt appropriately.
+
+    const SpaHandler = {
+        /** Callback function to invoke on navigation: callback(newPageType, oldPageType) */
+        onNavigate: null,
+
+        /** Last known URL to detect actual changes */
+        lastUrl: '',
+
+        /** Whether the handler has been initialized */
+        initialized: false,
+
+        /**
+         * Initialize the SPA handler.
+         * Wraps History API methods and listens for popstate events.
+         * @param {function} callback - Called with (newPageType, oldPageType) on navigation.
+         */
+        init: function(callback) {
+            if (this.initialized) {
+                console.log('[LiSeSca] SpaHandler already initialized, skipping.');
+                return;
+            }
+
+            this.onNavigate = callback;
+            this.lastUrl = window.location.href;
+            this.initialized = true;
+
+            var self = this;
+
+            // Wrap history.pushState to intercept SPA navigations
+            var originalPushState = history.pushState;
+            history.pushState = function() {
+                var result = originalPushState.apply(this, arguments);
+                self.handleUrlChange();
+                return result;
+            };
+
+            // Wrap history.replaceState to intercept URL replacements
+            var originalReplaceState = history.replaceState;
+            history.replaceState = function() {
+                var result = originalReplaceState.apply(this, arguments);
+                self.handleUrlChange();
+                return result;
+            };
+
+            // Listen for back/forward button navigation
+            window.addEventListener('popstate', function() {
+                self.handleUrlChange();
+            });
+
+            console.log('[LiSeSca] SpaHandler initialized. Monitoring URL changes.');
+        },
+
+        /**
+         * Check if the URL has actually changed and invoke the callback if so.
+         */
+        handleUrlChange: function() {
+            var currentUrl = window.location.href;
+
+            // Only trigger if the URL actually changed
+            if (currentUrl === this.lastUrl) {
+                return;
+            }
+
+            var oldUrl = this.lastUrl;
+            this.lastUrl = currentUrl;
+
+            // Determine page types before and after navigation
+            var oldPageType = this.getPageTypeFromUrl(oldUrl);
+            var newPageType = PageDetector.getPageType();
+
+            console.log('[LiSeSca] SPA navigation detected: ' + oldPageType + ' -> ' + newPageType);
+
+            // Invoke the callback if one is registered
+            if (this.onNavigate) {
+                this.onNavigate(newPageType, oldPageType);
+            }
+        },
+
+        /**
+         * Determine page type from a URL string (for analyzing old URL).
+         * @param {string} url - The URL to analyze.
+         * @returns {string} 'people', 'jobs', or 'unknown'.
+         */
+        getPageTypeFromUrl: function(url) {
+            if (url.indexOf('linkedin.com/search/results/people') !== -1) {
+                return 'people';
+            }
+            if (url.indexOf('linkedin.com/jobs/search') !== -1 ||
+                url.indexOf('linkedin.com/jobs/collections') !== -1) {
+                return 'jobs';
+            }
+            return 'unknown';
+        }
+    };
+
     // ===== CSS SELECTORS (JOBS) =====
     // Selectors for LinkedIn's job search DOM.
     // The jobs UI uses a two-panel layout: left panel = job list, right panel = detail view.
@@ -491,10 +587,19 @@
         statusArea: null,
         isMenuOpen: false,
 
+        /** Flag to prevent duplicate style injection (styles persist across SPA navigation) */
+        stylesInjected: false,
+
         /**
          * Inject all LiSeSca styles into the page.
+         * Skips if already injected (styles persist across SPA navigation).
          */
         injectStyles: function() {
+            if (this.stylesInjected) {
+                console.log('[LiSeSca] Styles already injected, skipping.');
+                return;
+            }
+            this.stylesInjected = true;
             GM_addStyle(`
             /* ---- LiSeSca floating panel ---- */
             .lisesca-panel {
@@ -1376,6 +1481,53 @@
                 jobPause: jobPauseMin + '-' + jobPauseMax + 's'
             });
             this.hideConfig();
+        },
+
+        // --- SPA Navigation Support ---
+
+        /**
+         * Check if the main panel currently exists in the DOM.
+         * @returns {boolean}
+         */
+        isPanelActive: function() {
+            return this.panel !== null && document.body.contains(this.panel);
+        },
+
+        /**
+         * Remove the main floating panel from the DOM.
+         */
+        removePanel: function() {
+            if (this.panel && this.panel.parentNode) {
+                this.panel.parentNode.removeChild(this.panel);
+                console.log('[LiSeSca] UI panel removed.');
+            }
+            this.panel = null;
+            this.menu = null;
+            this.statusArea = null;
+            this.isMenuOpen = false;
+        },
+
+        /**
+         * Remove the configuration overlay from the DOM.
+         */
+        removeConfigPanel: function() {
+            if (this.configOverlay && this.configOverlay.parentNode) {
+                this.configOverlay.parentNode.removeChild(this.configOverlay);
+                console.log('[LiSeSca] Config panel removed.');
+            }
+            this.configOverlay = null;
+        },
+
+        /**
+         * Remove existing panels and create fresh ones for the current page type.
+         * Used when SPA navigation changes the page type.
+         */
+        rebuildPanel: function() {
+            this.removePanel();
+            this.removeConfigPanel();
+            this.createPanel();
+            this.createConfigPanel();
+            console.log('[LiSeSca] UI panels rebuilt for new page.');
         }
     };
 
@@ -3378,12 +3530,13 @@
 
     // ===== MAIN CONTROLLER (PEOPLE SEARCH) =====
     // Orchestrates the people search scraping lifecycle.
+    // Also handles SPA navigation detection and UI lifecycle.
 
     const Controller = {
 
         /**
          * Initialize the script. Called once on every page load.
-         * Dispatches to the correct controller based on page type and scrape mode.
+         * Sets up SPA navigation handler and builds UI if on a supported page.
          */
         init: function() {
             console.log('[LiSeSca] v' + CONFIG.VERSION + ' initializing...');
@@ -3393,7 +3546,32 @@
 
             CONFIG.load();
 
+            // Always inject styles (they persist across SPA navigation)
             UI.injectStyles();
+
+            // Initialize SPA navigation handler
+            var self = this;
+            SpaHandler.init(function(newPageType, oldPageType) {
+                self.handleNavigation(newPageType, oldPageType);
+            });
+
+            // Set up UI for the current page
+            this.setupForCurrentPage();
+        },
+
+        /**
+         * Set up the UI and resume any active scraping for the current page type.
+         * Called on initial load and after SPA navigation to a supported page.
+         */
+        setupForCurrentPage: function() {
+            var pageType = PageDetector.getPageType();
+
+            if (pageType === 'unknown') {
+                console.log('[LiSeSca] Not on a supported page. UI hidden, waiting for navigation.');
+                return;
+            }
+
+            // Create UI panels for the current page type
             UI.createPanel();
             UI.createConfigPanel();
 
@@ -3408,6 +3586,36 @@
             } else {
                 console.log('[LiSeSca] Ready. Click SCRAPE to begin.');
             }
+        },
+
+        /**
+         * Handle SPA navigation events.
+         * Shows/hides/rebuilds the UI based on the new page type.
+         * @param {string} newPageType - The page type after navigation.
+         * @param {string} oldPageType - The page type before navigation.
+         */
+        handleNavigation: function(newPageType, oldPageType) {
+            // Ignore navigation events during active scraping
+            // (actual scraping uses full page reloads for navigation)
+            if (State.isScraping()) {
+                console.log('[LiSeSca] Ignoring SPA navigation during active scrape.');
+                return;
+            }
+
+            // If we're on an unsupported page now, remove the panel
+            if (newPageType === 'unknown') {
+                if (UI.isPanelActive()) {
+                    UI.removePanel();
+                    UI.removeConfigPanel();
+                    console.log('[LiSeSca] Navigated away from supported page. UI hidden.');
+                }
+                return;
+            }
+            setTimeout(function() {
+                // Rebuild the panel (handles color change between people/jobs)
+                UI.rebuildPanel();
+                console.log('[LiSeSca] Ready on ' + newPageType + ' page.');
+            }, 500);
         },
 
         /**

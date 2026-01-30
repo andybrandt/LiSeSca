@@ -1,8 +1,10 @@
 // ===== MAIN CONTROLLER (PEOPLE SEARCH) =====
 // Orchestrates the people search scraping lifecycle.
+// Also handles SPA navigation detection and UI lifecycle.
 import { CONFIG } from '../shared/config.js';
 import { State } from '../shared/state.js';
 import { PageDetector } from '../shared/page-detector.js';
+import { SpaHandler } from '../shared/spa-handler.js';
 import { UI, setControllers } from '../ui/ui.js';
 import { Emulator } from './emulator.js';
 import { Extractor } from './extractor.js';
@@ -14,7 +16,7 @@ export const Controller = {
 
     /**
      * Initialize the script. Called once on every page load.
-     * Dispatches to the correct controller based on page type and scrape mode.
+     * Sets up SPA navigation handler and builds UI if on a supported page.
      */
     init: function() {
         console.log('[LiSeSca] v' + CONFIG.VERSION + ' initializing...');
@@ -24,7 +26,32 @@ export const Controller = {
 
         CONFIG.load();
 
+        // Always inject styles (they persist across SPA navigation)
         UI.injectStyles();
+
+        // Initialize SPA navigation handler
+        var self = this;
+        SpaHandler.init(function(newPageType, oldPageType) {
+            self.handleNavigation(newPageType, oldPageType);
+        });
+
+        // Set up UI for the current page
+        this.setupForCurrentPage();
+    },
+
+    /**
+     * Set up the UI and resume any active scraping for the current page type.
+     * Called on initial load and after SPA navigation to a supported page.
+     */
+    setupForCurrentPage: function() {
+        var pageType = PageDetector.getPageType();
+
+        if (pageType === 'unknown') {
+            console.log('[LiSeSca] Not on a supported page. UI hidden, waiting for navigation.');
+            return;
+        }
+
+        // Create UI panels for the current page type
         UI.createPanel();
         UI.createConfigPanel();
 
@@ -39,6 +66,40 @@ export const Controller = {
         } else {
             console.log('[LiSeSca] Ready. Click SCRAPE to begin.');
         }
+    },
+
+    /**
+     * Handle SPA navigation events.
+     * Shows/hides/rebuilds the UI based on the new page type.
+     * @param {string} newPageType - The page type after navigation.
+     * @param {string} oldPageType - The page type before navigation.
+     */
+    handleNavigation: function(newPageType, oldPageType) {
+        // Ignore navigation events during active scraping
+        // (actual scraping uses full page reloads for navigation)
+        if (State.isScraping()) {
+            console.log('[LiSeSca] Ignoring SPA navigation during active scrape.');
+            return;
+        }
+
+        // If we're on an unsupported page now, remove the panel
+        if (newPageType === 'unknown') {
+            if (UI.isPanelActive()) {
+                UI.removePanel();
+                UI.removeConfigPanel();
+                console.log('[LiSeSca] Navigated away from supported page. UI hidden.');
+            }
+            return;
+        }
+
+        // We're on a supported page now
+        // Wait a bit for LinkedIn to render the new page content
+        var self = this;
+        setTimeout(function() {
+            // Rebuild the panel (handles color change between people/jobs)
+            UI.rebuildPanel();
+            console.log('[LiSeSca] Ready on ' + newPageType + ' page.');
+        }, 500);
     },
 
     /**

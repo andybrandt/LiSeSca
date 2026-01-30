@@ -4,12 +4,10 @@
 const banner = `// ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.8
+// @version      0.3.9
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
-// @match        https://www.linkedin.com/search/results/people/*
-// @match        https://www.linkedin.com/jobs/search/*
-// @match        https://www.linkedin.com/jobs/collections/*
+// @match        https://www.linkedin.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue

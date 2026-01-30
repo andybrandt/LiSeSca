@@ -35,21 +35,10 @@ By default, Tampermonkey only allows scripts installed from its online repositor
 3. Tampermonkey should automatically detect the userscript and offer to install it. Click **Install**.
 4. Alternatively, open the Tampermonkey Dashboard, go to the **Utilities** tab, and paste the URL to the raw script file under **Install from URL**.
 
-## Building from Source
-
-The source code is split into ES modules under `src/` and bundled using [Rollup](https://rollupjs.org/).
-
-```bash
-npm install        # Install dependencies (first time only)
-npm run build      # Bundle into lisesca.user.js
-```
-
-The build output is `lisesca.user.js` in the project root.
-
 ## Usage
 
-1. Navigate to a LinkedIn **People Search** page (`linkedin.com/search/results/people/...`) or a **Jobs Search** page (`linkedin.com/jobs/search/...` or `linkedin.com/jobs/collections/...`).
-2. A floating panel appears near the top-right corner of the page.
+1. Navigate to any LinkedIn page — the script loads on all LinkedIn pages.
+2. When you navigate to a **People Search** page (`linkedin.com/search/results/people/...`) or a **Jobs Search** page (`linkedin.com/jobs/search/...` or `linkedin.com/jobs/collections/...`), a floating panel appears near the top-right corner. The panel automatically appears/disappears as you navigate within LinkedIn (SPA navigation is fully supported).
 3. Click the **SCRAPE** button to reveal options.
 4. Choose how many pages to scrape:
    - **People search:** 1, 10, 50, or All pages
@@ -68,6 +57,17 @@ Click the gear icon next to the SCRAPE button to adjust timing parameters:
 ### Crash Recovery
 
 LiSeSca persists its state using Tampermonkey's storage. If the browser crashes or the page is accidentally closed mid-scrape, reopening the LinkedIn search page will resume the scrape from where it left off.
+
+## Building from Source
+
+The source code is split into ES modules under `src/` and bundled using [Rollup](https://rollupjs.org/).
+
+```bash
+npm install        # Install dependencies (first time only)
+npm run build      # Bundle into lisesca.user.js
+```
+
+The build output is `lisesca.user.js` in the project root.
 
 ## Disclaimer
 

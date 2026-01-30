@@ -25,10 +25,19 @@ export const UI = {
     statusArea: null,
     isMenuOpen: false,
 
+    /** Flag to prevent duplicate style injection (styles persist across SPA navigation) */
+    stylesInjected: false,
+
     /**
      * Inject all LiSeSca styles into the page.
+     * Skips if already injected (styles persist across SPA navigation).
      */
     injectStyles: function() {
+        if (this.stylesInjected) {
+            console.log('[LiSeSca] Styles already injected, skipping.');
+            return;
+        }
+        this.stylesInjected = true;
         GM_addStyle(`
             /* ---- LiSeSca floating panel ---- */
             .lisesca-panel {
@@ -910,5 +919,52 @@ export const UI = {
             jobPause: jobPauseMin + '-' + jobPauseMax + 's'
         });
         this.hideConfig();
+    },
+
+    // --- SPA Navigation Support ---
+
+    /**
+     * Check if the main panel currently exists in the DOM.
+     * @returns {boolean}
+     */
+    isPanelActive: function() {
+        return this.panel !== null && document.body.contains(this.panel);
+    },
+
+    /**
+     * Remove the main floating panel from the DOM.
+     */
+    removePanel: function() {
+        if (this.panel && this.panel.parentNode) {
+            this.panel.parentNode.removeChild(this.panel);
+            console.log('[LiSeSca] UI panel removed.');
+        }
+        this.panel = null;
+        this.menu = null;
+        this.statusArea = null;
+        this.isMenuOpen = false;
+    },
+
+    /**
+     * Remove the configuration overlay from the DOM.
+     */
+    removeConfigPanel: function() {
+        if (this.configOverlay && this.configOverlay.parentNode) {
+            this.configOverlay.parentNode.removeChild(this.configOverlay);
+            console.log('[LiSeSca] Config panel removed.');
+        }
+        this.configOverlay = null;
+    },
+
+    /**
+     * Remove existing panels and create fresh ones for the current page type.
+     * Used when SPA navigation changes the page type.
+     */
+    rebuildPanel: function() {
+        this.removePanel();
+        this.removeConfigPanel();
+        this.createPanel();
+        this.createConfigPanel();
+        console.log('[LiSeSca] UI panels rebuilt for new page.');
     }
 };
