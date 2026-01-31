@@ -6,6 +6,66 @@ import { Emulator } from '../people/emulator.js';
 import { htmlToMarkdown } from '../shared/turndown.js';
 
 export const JobExtractor = {
+    /**
+     * Ensure a job card is rendered and return it along with its shell.
+     * @param {string} jobId - The job ID to locate.
+     * @returns {Promise<Object>} { card: HTMLElement|null, shell: HTMLElement|null }
+     */
+    getRenderedCard: function(jobId) {
+        var card = document.querySelector('div[data-job-id="' + jobId + '"]');
+        if (card) {
+            return Promise.resolve({ card: card, shell: null });
+        }
+
+        var shell = document.querySelector('li[data-occludable-job-id="' + jobId + '"]');
+        if (!shell) {
+            return Promise.resolve({ card: null, shell: null });
+        }
+
+        shell.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        var maxAttempts = 20;  // 20 * 200ms = 4 seconds max wait
+        var attempt = 0;
+
+        function waitForRender() {
+            attempt++;
+            return Emulator.randomDelay(150, 250).then(function() {
+                var rendered = document.querySelector('div[data-job-id="' + jobId + '"]');
+                if (rendered) {
+                    return rendered;
+                }
+                if (attempt >= maxAttempts) {
+                    console.warn('[LiSeSca] Card ' + jobId + ' did not render after ' + attempt + ' attempts.');
+                    return null;
+                }
+                return waitForRender();
+            });
+        }
+
+        return waitForRender().then(function(renderedCard) {
+            return { card: renderedCard, shell: shell };
+        });
+    },
+
+    /**
+     * Check if a job card is marked as "Viewed" or "Applied".
+     * @param {string} jobId - The job ID to check.
+     * @returns {Promise<boolean>} True if the card shows "Viewed" or "Applied".
+     */
+    isJobViewed: function(jobId) {
+        var self = this;
+        return self.getRenderedCard(jobId).then(function(result) {
+            if (!result.card) {
+                return false;
+            }
+            var stateEl = result.card.querySelector(JobSelectors.CARD_FOOTER_JOB_STATE);
+            if (!stateEl) {
+                return false;
+            }
+            var stateText = (stateEl.textContent || '').trim();
+            return stateText.match(/viewed|applied/i) ? true : false;
+        });
+    },
 
     /**
      * Wait for job cards to appear in the DOM.
@@ -159,13 +219,20 @@ export const JobExtractor = {
         var insightEl = card.querySelector(JobSelectors.CARD_INSIGHT);
         var insight = insightEl ? (insightEl.textContent || '').trim() : '';
 
+        // Viewed state from the card footer (if present)
+        var viewedEl = card.querySelector(JobSelectors.CARD_FOOTER_JOB_STATE);
+        var stateText = viewedEl ? (viewedEl.textContent || '').trim() : '';
+        var viewed = stateText.match(/viewed|applied/i) ? true : false;
+
         return {
             jobId: jobId,
             jobTitle: jobTitle,
             company: company,
             location: location,
             directLink: directLink,
-            cardInsight: insight
+            cardInsight: insight,
+            viewed: viewed,
+            jobState: stateText
         };
     },
 
@@ -180,72 +247,27 @@ export const JobExtractor = {
      * @returns {Promise<void>}
      */
     clickJobCard: function(jobId) {
-        var card = document.querySelector('div[data-job-id="' + jobId + '"]');
-
-        // If the inner card content is not rendered, we need to scroll
-        // the outer <li> shell into view to trigger Ember rendering.
-        if (!card) {
-            console.log('[LiSeSca] Card not rendered for ' + jobId + ', scrolling shell into view...');
-            var shell = document.querySelector('li[data-occludable-job-id="' + jobId + '"]');
-
-            if (!shell) {
-                console.warn('[LiSeSca] No shell <li> found for job ' + jobId);
-                return Promise.resolve();
+        return this.getRenderedCard(jobId).then(function(result) {
+            if (!result.card && result.shell) {
+                console.log('[LiSeSca] Clicking shell <li> as fallback for ' + jobId);
+                result.shell.click();
+                return;
             }
 
-            // Scroll the shell into view — this triggers Ember to render the inner content
-            shell.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-            // Poll for the inner div[data-job-id] to appear after Ember renders it
-            var maxAttempts = 20;  // 20 * 200ms = 4 seconds max wait
-            var attempt = 0;
-
-            /**
-             * Poll until the inner card content is rendered by Ember.
-             * @returns {Promise<HTMLElement|null>} The rendered card, or null.
-             */
-            function waitForRender() {
-                attempt++;
-                return Emulator.randomDelay(150, 250).then(function() {
-                    var rendered = document.querySelector('div[data-job-id="' + jobId + '"]');
-                    if (rendered) {
-                        return rendered;
-                    }
-                    if (attempt >= maxAttempts) {
-                        console.warn('[LiSeSca] Card ' + jobId + ' did not render after ' + attempt + ' attempts.');
-                        return null;
-                    }
-                    return waitForRender();
-                });
+            if (!result.card) {
+                console.warn('[LiSeSca] No card rendered for job ' + jobId);
+                return;
             }
 
-            return waitForRender().then(function(renderedCard) {
-                if (!renderedCard) {
-                    // Last resort: try clicking the shell itself
-                    console.log('[LiSeSca] Clicking shell <li> as fallback for ' + jobId);
-                    shell.click();
-                    return;
-                }
-                var titleLink = renderedCard.querySelector(JobSelectors.CARD_TITLE_LINK);
-                if (titleLink) {
-                    titleLink.click();
-                } else {
-                    renderedCard.click();
-                }
-                console.log('[LiSeSca] Clicked job card: ' + jobId);
-            });
-        }
+            var titleLink = result.card.querySelector(JobSelectors.CARD_TITLE_LINK);
+            if (titleLink) {
+                titleLink.click();
+            } else {
+                result.card.click();
+            }
 
-        // Card is already in the DOM — click it directly
-        var titleLink = card.querySelector(JobSelectors.CARD_TITLE_LINK);
-        if (titleLink) {
-            titleLink.click();
-        } else {
-            card.click();
-        }
-
-        console.log('[LiSeSca] Clicked job card: ' + jobId);
-        return Promise.resolve();
+            console.log('[LiSeSca] Clicked job card: ' + jobId);
+        });
     },
 
     /**
@@ -611,6 +633,8 @@ export const JobExtractor = {
                 networkConnections: networkInfo || cardData.cardInsight || '',
                 industry: aboutCompany.industry || '',
                 employeeCount: aboutCompany.employeeCount || '',
+                viewed: cardData.viewed === true,
+                jobState: cardData.jobState || '',
                 jobDescription: jobDescription || '',
                 premiumInsights: premiumInsights || '',
                 aboutCompany: aboutCompany.description || ''

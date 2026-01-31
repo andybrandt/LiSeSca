@@ -189,10 +189,31 @@ export const JobController = {
         }
         UI.showStatus(statusMsg);
 
-        // Extract the full job data
-        JobExtractor.extractFullJob(jobId).then(function(job) {
+        var includeViewed = State.getIncludeViewed();
+        var viewedCheck = includeViewed ? Promise.resolve(false) : JobExtractor.isJobViewed(jobId);
+
+        viewedCheck.then(function(isViewed) {
+            if (!State.isScraping()) {
+                return null;
+            }
+            if (isViewed) {
+                console.log('[LiSeSca] Skipping viewed job ' + jobId);
+                UI.showStatus(statusMsg + ' — Skipping viewed job');
+                State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                return Emulator.randomDelay(300, 600).then(function() {
+                    self.scrapeNextJob();
+                }).then(function() {
+                    return 'skip';
+                });
+            }
+            return JobExtractor.extractFullJob(jobId);
+        }).then(function(job) {
             if (!State.isScraping()) {
                 return;
+            }
+
+            if (job === 'skip') {
+                return 'skip';
             }
 
             if (job) {
@@ -208,9 +229,13 @@ export const JobController = {
             var reviewPrefix = 'Page ' + state.currentPage
                 + ' — Reviewing job ' + (jobIndex + 1) + ' of ' + totalOnPage;
             return JobEmulator.emulateJobReview(reviewPrefix);
-        }).then(function() {
+        }).then(function(result) {
             if (!State.isScraping()) {
                 return;
+            }
+
+            if (result === 'skip') {
+                return 'skip';
             }
 
             // Advance to the next job
@@ -221,9 +246,12 @@ export const JobController = {
                 CONFIG.MIN_JOB_PAUSE * 1000,
                 CONFIG.MAX_JOB_PAUSE * 1000
             );
-        }).then(function() {
+        }).then(function(result) {
             if (!State.isScraping()) {
                 self.finishScraping();
+                return;
+            }
+            if (result === 'skip') {
                 return;
             }
             // Recurse to process the next job

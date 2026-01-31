@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.10
+// @version      0.3.11
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
 // @updateURL    https://github.com/andybrandt/LiSeSca/raw/refs/heads/master/lisesca.user.js
 // @downloadURL  https://github.com/andybrandt/LiSeSca/raw/refs/heads/master/lisesca.user.js
 // @match        https://www.linkedin.com/*
+// @noframes	
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
@@ -24,7 +25,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.3.10',
+        VERSION: '0.3.11',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -104,6 +105,7 @@
             SCRAPED_BUFFER: 'lisesca_scrapedBuffer',
             SEARCH_URL: 'lisesca_searchUrl',
             FORMATS: 'lisesca_formats',
+            INCLUDE_VIEWED: 'lisesca_includeViewed',
             // Job-specific state keys
             SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
             JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
@@ -159,6 +161,7 @@
                 scrapedBuffer: this.getBuffer(),
                 searchUrl: this.get(this.KEYS.SEARCH_URL, ''),
                 formats: this.getFormats(),
+                includeViewed: this.getIncludeViewed(),
                 scrapeMode: this.getScrapeMode(),
                 jobIndex: this.get(this.KEYS.JOB_INDEX, 0),
                 jobIdsOnPage: this.getJobIdsOnPage()
@@ -224,11 +227,31 @@
         },
 
         /**
+         * Read the "Include viewed" preference from the UI checkbox.
+         * @returns {boolean} True if viewed jobs should be included.
+         */
+        readIncludeViewedFromUI: function() {
+            var includeViewedCheck = document.getElementById('lisesca-include-viewed');
+            if (!includeViewedCheck) {
+                return true;
+            }
+            return includeViewedCheck.checked;
+        },
+
+        /**
          * Save selected export formats to persistent storage.
          * @param {Array<string>} formats - Array of format identifiers.
          */
         saveFormats: function(formats) {
             this.set(this.KEYS.FORMATS, JSON.stringify(formats));
+        },
+
+        /**
+         * Save the "Include viewed" preference to persistent storage.
+         * @param {boolean} includeViewed - True to include viewed jobs.
+         */
+        saveIncludeViewed: function(includeViewed) {
+            this.set(this.KEYS.INCLUDE_VIEWED, includeViewed === true);
         },
 
         /**
@@ -244,6 +267,15 @@
                 console.warn('[LiSeSca] Failed to parse formats, defaulting to xlsx:', error);
                 return ['xlsx'];
             }
+        },
+
+        /**
+         * Retrieve the saved "Include viewed" preference.
+         * Defaults to true if not set.
+         * @returns {boolean}
+         */
+        getIncludeViewed: function() {
+            return this.get(this.KEYS.INCLUDE_VIEWED, true);
         },
 
         /**
@@ -449,6 +481,7 @@
         CARD_COMPANY: '.artdeco-entity-lockup__subtitle span',
         CARD_METADATA: '.job-card-container__metadata-wrapper li span',
         CARD_INSIGHT: '.job-card-container__job-insight-text',
+        CARD_FOOTER_JOB_STATE: '.job-card-container__footer-job-state',
 
         DETAIL_TITLE: '.job-details-jobs-unified-top-card__job-title h1',
         DETAIL_COMPANY_NAME: '.job-details-jobs-unified-top-card__company-name a',
@@ -718,6 +751,13 @@
                 margin-bottom: 8px;
             }
 
+            .lisesca-toggle-row {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                margin-bottom: 8px;
+            }
+
             .lisesca-checkbox-label {
                 display: flex;
                 align-items: center;
@@ -831,6 +871,13 @@
                 font-weight: 600;
                 margin-bottom: 16px;
                 color: #f0f6fc;
+            }
+
+            .lisesca-config-version {
+                font-size: 11px;
+                color: #8b949e;
+                margin-top: -12px;
+                margin-bottom: 16px;
             }
 
             .lisesca-config-section {
@@ -1057,6 +1104,26 @@
             mdLabel.appendChild(document.createTextNode('Markdown'));
             fmtRow.appendChild(mdLabel);
 
+            var includeViewedRow = null;
+            var includeViewedCheck = null;
+            if (isJobs) {
+                includeViewedRow = document.createElement('div');
+                includeViewedRow.className = 'lisesca-toggle-row';
+
+                var includeViewedLabel = document.createElement('label');
+                includeViewedLabel.className = 'lisesca-checkbox-label';
+                includeViewedCheck = document.createElement('input');
+                includeViewedCheck.type = 'checkbox';
+                includeViewedCheck.id = 'lisesca-include-viewed';
+                includeViewedCheck.checked = State.getIncludeViewed();
+                includeViewedCheck.addEventListener('change', function() {
+                    State.saveIncludeViewed(includeViewedCheck.checked);
+                });
+                includeViewedLabel.appendChild(includeViewedCheck);
+                includeViewedLabel.appendChild(document.createTextNode('Include viewed'));
+                includeViewedRow.appendChild(includeViewedLabel);
+            }
+
             // GO button — dispatches to the correct controller
             var goBtn = document.createElement('button');
             goBtn.className = 'lisesca-go-btn';
@@ -1067,6 +1134,7 @@
                 console.log('[LiSeSca] GO pressed, pages=' + selectedValue + ', pageType=' + pageType);
 
                 if (isJobs) {
+                    State.saveIncludeViewed(State.readIncludeViewedFromUI());
                     JobController$1.startScraping(selectedValue);
                 } else {
                     Controller$1.startScraping(selectedValue);
@@ -1077,6 +1145,9 @@
             this.menu.appendChild(select);
             this.menu.appendChild(fmtLabel);
             this.menu.appendChild(fmtRow);
+            if (includeViewedRow) {
+                this.menu.appendChild(includeViewedRow);
+            }
             this.menu.appendChild(goBtn);
 
             // --- Status area ---
@@ -1226,6 +1297,10 @@
             title.className = 'lisesca-config-title';
             title.textContent = 'LiSeSca Configuration';
 
+            var version = document.createElement('div');
+            version.className = 'lisesca-config-version';
+            version.textContent = 'v' + CONFIG.VERSION;
+
             var minRow = document.createElement('div');
             minRow.className = 'lisesca-config-row';
 
@@ -1363,6 +1438,7 @@
             pageSectionLabel.textContent = 'Page scanning timing';
 
             panel.appendChild(title);
+            panel.appendChild(version);
             panel.appendChild(pageSectionLabel);
             panel.appendChild(minRow);
             panel.appendChild(maxRow);
@@ -2254,6 +2330,66 @@
     // The flow is: click a card → wait for detail panel → extract all fields.
 
     const JobExtractor = {
+        /**
+         * Ensure a job card is rendered and return it along with its shell.
+         * @param {string} jobId - The job ID to locate.
+         * @returns {Promise<Object>} { card: HTMLElement|null, shell: HTMLElement|null }
+         */
+        getRenderedCard: function(jobId) {
+            var card = document.querySelector('div[data-job-id="' + jobId + '"]');
+            if (card) {
+                return Promise.resolve({ card: card, shell: null });
+            }
+
+            var shell = document.querySelector('li[data-occludable-job-id="' + jobId + '"]');
+            if (!shell) {
+                return Promise.resolve({ card: null, shell: null });
+            }
+
+            shell.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+            var maxAttempts = 20;  // 20 * 200ms = 4 seconds max wait
+            var attempt = 0;
+
+            function waitForRender() {
+                attempt++;
+                return Emulator.randomDelay(150, 250).then(function() {
+                    var rendered = document.querySelector('div[data-job-id="' + jobId + '"]');
+                    if (rendered) {
+                        return rendered;
+                    }
+                    if (attempt >= maxAttempts) {
+                        console.warn('[LiSeSca] Card ' + jobId + ' did not render after ' + attempt + ' attempts.');
+                        return null;
+                    }
+                    return waitForRender();
+                });
+            }
+
+            return waitForRender().then(function(renderedCard) {
+                return { card: renderedCard, shell: shell };
+            });
+        },
+
+        /**
+         * Check if a job card is marked as "Viewed" or "Applied".
+         * @param {string} jobId - The job ID to check.
+         * @returns {Promise<boolean>} True if the card shows "Viewed" or "Applied".
+         */
+        isJobViewed: function(jobId) {
+            var self = this;
+            return self.getRenderedCard(jobId).then(function(result) {
+                if (!result.card) {
+                    return false;
+                }
+                var stateEl = result.card.querySelector(JobSelectors.CARD_FOOTER_JOB_STATE);
+                if (!stateEl) {
+                    return false;
+                }
+                var stateText = (stateEl.textContent || '').trim();
+                return stateText.match(/viewed|applied/i) ? true : false;
+            });
+        },
 
         /**
          * Wait for job cards to appear in the DOM.
@@ -2407,13 +2543,20 @@
             var insightEl = card.querySelector(JobSelectors.CARD_INSIGHT);
             var insight = insightEl ? (insightEl.textContent || '').trim() : '';
 
+            // Viewed state from the card footer (if present)
+            var viewedEl = card.querySelector(JobSelectors.CARD_FOOTER_JOB_STATE);
+            var stateText = viewedEl ? (viewedEl.textContent || '').trim() : '';
+            var viewed = stateText.match(/viewed|applied/i) ? true : false;
+
             return {
                 jobId: jobId,
                 jobTitle: jobTitle,
                 company: company,
                 location: location,
                 directLink: directLink,
-                cardInsight: insight
+                cardInsight: insight,
+                viewed: viewed,
+                jobState: stateText
             };
         },
 
@@ -2428,72 +2571,27 @@
          * @returns {Promise<void>}
          */
         clickJobCard: function(jobId) {
-            var card = document.querySelector('div[data-job-id="' + jobId + '"]');
-
-            // If the inner card content is not rendered, we need to scroll
-            // the outer <li> shell into view to trigger Ember rendering.
-            if (!card) {
-                console.log('[LiSeSca] Card not rendered for ' + jobId + ', scrolling shell into view...');
-                var shell = document.querySelector('li[data-occludable-job-id="' + jobId + '"]');
-
-                if (!shell) {
-                    console.warn('[LiSeSca] No shell <li> found for job ' + jobId);
-                    return Promise.resolve();
+            return this.getRenderedCard(jobId).then(function(result) {
+                if (!result.card && result.shell) {
+                    console.log('[LiSeSca] Clicking shell <li> as fallback for ' + jobId);
+                    result.shell.click();
+                    return;
                 }
 
-                // Scroll the shell into view — this triggers Ember to render the inner content
-                shell.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-                // Poll for the inner div[data-job-id] to appear after Ember renders it
-                var maxAttempts = 20;  // 20 * 200ms = 4 seconds max wait
-                var attempt = 0;
-
-                /**
-                 * Poll until the inner card content is rendered by Ember.
-                 * @returns {Promise<HTMLElement|null>} The rendered card, or null.
-                 */
-                function waitForRender() {
-                    attempt++;
-                    return Emulator.randomDelay(150, 250).then(function() {
-                        var rendered = document.querySelector('div[data-job-id="' + jobId + '"]');
-                        if (rendered) {
-                            return rendered;
-                        }
-                        if (attempt >= maxAttempts) {
-                            console.warn('[LiSeSca] Card ' + jobId + ' did not render after ' + attempt + ' attempts.');
-                            return null;
-                        }
-                        return waitForRender();
-                    });
+                if (!result.card) {
+                    console.warn('[LiSeSca] No card rendered for job ' + jobId);
+                    return;
                 }
 
-                return waitForRender().then(function(renderedCard) {
-                    if (!renderedCard) {
-                        // Last resort: try clicking the shell itself
-                        console.log('[LiSeSca] Clicking shell <li> as fallback for ' + jobId);
-                        shell.click();
-                        return;
-                    }
-                    var titleLink = renderedCard.querySelector(JobSelectors.CARD_TITLE_LINK);
-                    if (titleLink) {
-                        titleLink.click();
-                    } else {
-                        renderedCard.click();
-                    }
-                    console.log('[LiSeSca] Clicked job card: ' + jobId);
-                });
-            }
+                var titleLink = result.card.querySelector(JobSelectors.CARD_TITLE_LINK);
+                if (titleLink) {
+                    titleLink.click();
+                } else {
+                    result.card.click();
+                }
 
-            // Card is already in the DOM — click it directly
-            var titleLink = card.querySelector(JobSelectors.CARD_TITLE_LINK);
-            if (titleLink) {
-                titleLink.click();
-            } else {
-                card.click();
-            }
-
-            console.log('[LiSeSca] Clicked job card: ' + jobId);
-            return Promise.resolve();
+                console.log('[LiSeSca] Clicked job card: ' + jobId);
+            });
         },
 
         /**
@@ -2859,6 +2957,8 @@
                     networkConnections: networkInfo || cardData.cardInsight || '',
                     industry: aboutCompany.industry || '',
                     employeeCount: aboutCompany.employeeCount || '',
+                    viewed: cardData.viewed === true,
+                    jobState: cardData.jobState || '',
                     jobDescription: jobDescription || '',
                     premiumInsights: premiumInsights || '',
                     aboutCompany: aboutCompany.description || ''
@@ -2999,7 +3099,7 @@
 
         /** Column headers for XLSX export */
         COLUMN_HEADERS: [
-            'Job Title', 'Company', 'Location', 'Posted', 'Applicants',
+            'Job Title', 'Company', 'Location', 'Posted', 'Applicants', 'Job State',
             'Workplace Type', 'Employment Type', 'Apply Link', 'Job Link',
             'Network Connections', 'Industry', 'Employee Count',
             'About the Job', 'Premium Insights', 'About the Company'
@@ -3017,6 +3117,7 @@
                 job.location || '',
                 job.postedDate || '',
                 job.applicants || '',
+                job.jobState || '',
                 job.workplaceType || '',
                 job.employmentType || '',
                 job.applyLink || '',
@@ -3056,6 +3157,10 @@
             }
             if (postedLine) {
                 lines.push(postedLine);
+            }
+
+            if (job.jobState) {
+                lines.push('**Job State:** ' + job.jobState);
             }
 
             // Type line (workplace + employment)
@@ -3395,10 +3500,31 @@
             }
             UI.showStatus(statusMsg);
 
-            // Extract the full job data
-            JobExtractor.extractFullJob(jobId).then(function(job) {
+            var includeViewed = State.getIncludeViewed();
+            var viewedCheck = includeViewed ? Promise.resolve(false) : JobExtractor.isJobViewed(jobId);
+
+            viewedCheck.then(function(isViewed) {
+                if (!State.isScraping()) {
+                    return null;
+                }
+                if (isViewed) {
+                    console.log('[LiSeSca] Skipping viewed job ' + jobId);
+                    UI.showStatus(statusMsg + ' — Skipping viewed job');
+                    State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                    return Emulator.randomDelay(300, 600).then(function() {
+                        self.scrapeNextJob();
+                    }).then(function() {
+                        return 'skip';
+                    });
+                }
+                return JobExtractor.extractFullJob(jobId);
+            }).then(function(job) {
                 if (!State.isScraping()) {
                     return;
+                }
+
+                if (job === 'skip') {
+                    return 'skip';
                 }
 
                 if (job) {
@@ -3414,9 +3540,13 @@
                 var reviewPrefix = 'Page ' + state.currentPage
                     + ' — Reviewing job ' + (jobIndex + 1) + ' of ' + totalOnPage;
                 return JobEmulator.emulateJobReview(reviewPrefix);
-            }).then(function() {
+            }).then(function(result) {
                 if (!State.isScraping()) {
                     return;
+                }
+
+                if (result === 'skip') {
+                    return 'skip';
                 }
 
                 // Advance to the next job
@@ -3427,9 +3557,12 @@
                     CONFIG.MIN_JOB_PAUSE * 1000,
                     CONFIG.MAX_JOB_PAUSE * 1000
                 );
-            }).then(function() {
+            }).then(function(result) {
                 if (!State.isScraping()) {
                     self.finishScraping();
+                    return;
+                }
+                if (result === 'skip') {
                     return;
                 }
                 // Recurse to process the next job

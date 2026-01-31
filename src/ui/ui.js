@@ -153,6 +153,13 @@ export const UI = {
                 margin-bottom: 8px;
             }
 
+            .lisesca-toggle-row {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                margin-bottom: 8px;
+            }
+
             .lisesca-checkbox-label {
                 display: flex;
                 align-items: center;
@@ -266,6 +273,13 @@ export const UI = {
                 font-weight: 600;
                 margin-bottom: 16px;
                 color: #f0f6fc;
+            }
+
+            .lisesca-config-version {
+                font-size: 11px;
+                color: #8b949e;
+                margin-top: -12px;
+                margin-bottom: 16px;
             }
 
             .lisesca-config-section {
@@ -492,6 +506,26 @@ export const UI = {
         mdLabel.appendChild(document.createTextNode('Markdown'));
         fmtRow.appendChild(mdLabel);
 
+        var includeViewedRow = null;
+        var includeViewedCheck = null;
+        if (isJobs) {
+            includeViewedRow = document.createElement('div');
+            includeViewedRow.className = 'lisesca-toggle-row';
+
+            var includeViewedLabel = document.createElement('label');
+            includeViewedLabel.className = 'lisesca-checkbox-label';
+            includeViewedCheck = document.createElement('input');
+            includeViewedCheck.type = 'checkbox';
+            includeViewedCheck.id = 'lisesca-include-viewed';
+            includeViewedCheck.checked = State.getIncludeViewed();
+            includeViewedCheck.addEventListener('change', function() {
+                State.saveIncludeViewed(includeViewedCheck.checked);
+            });
+            includeViewedLabel.appendChild(includeViewedCheck);
+            includeViewedLabel.appendChild(document.createTextNode('Include viewed'));
+            includeViewedRow.appendChild(includeViewedLabel);
+        }
+
         // GO button — dispatches to the correct controller
         var goBtn = document.createElement('button');
         goBtn.className = 'lisesca-go-btn';
@@ -502,6 +536,7 @@ export const UI = {
             console.log('[LiSeSca] GO pressed, pages=' + selectedValue + ', pageType=' + pageType);
 
             if (isJobs) {
+                State.saveIncludeViewed(State.readIncludeViewedFromUI());
                 JobController.startScraping(selectedValue);
             } else {
                 Controller.startScraping(selectedValue);
@@ -512,6 +547,9 @@ export const UI = {
         this.menu.appendChild(select);
         this.menu.appendChild(fmtLabel);
         this.menu.appendChild(fmtRow);
+        if (includeViewedRow) {
+            this.menu.appendChild(includeViewedRow);
+        }
         this.menu.appendChild(goBtn);
 
         // --- Status area ---
@@ -661,6 +699,10 @@ export const UI = {
         title.className = 'lisesca-config-title';
         title.textContent = 'LiSeSca Configuration';
 
+        var version = document.createElement('div');
+        version.className = 'lisesca-config-version';
+        version.textContent = 'v' + CONFIG.VERSION;
+
         var minRow = document.createElement('div');
         minRow.className = 'lisesca-config-row';
 
@@ -798,6 +840,7 @@ export const UI = {
         pageSectionLabel.textContent = 'Page scanning timing';
 
         panel.appendChild(title);
+        panel.appendChild(version);
         panel.appendChild(pageSectionLabel);
         panel.appendChild(minRow);
         panel.appendChild(maxRow);

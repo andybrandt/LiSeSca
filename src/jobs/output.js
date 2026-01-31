@@ -9,7 +9,7 @@ export const JobOutput = {
 
     /** Column headers for XLSX export */
     COLUMN_HEADERS: [
-        'Job Title', 'Company', 'Location', 'Posted', 'Applicants',
+        'Job Title', 'Company', 'Location', 'Posted', 'Applicants', 'Job State',
         'Workplace Type', 'Employment Type', 'Apply Link', 'Job Link',
         'Network Connections', 'Industry', 'Employee Count',
         'About the Job', 'Premium Insights', 'About the Company'
@@ -27,6 +27,7 @@ export const JobOutput = {
             job.location || '',
             job.postedDate || '',
             job.applicants || '',
+            job.jobState || '',
             job.workplaceType || '',
             job.employmentType || '',
             job.applyLink || '',
@@ -66,6 +67,10 @@ export const JobOutput = {
         }
         if (postedLine) {
             lines.push(postedLine);
+        }
+
+        if (job.jobState) {
+            lines.push('**Job State:** ' + job.jobState);
         }
 
         // Type line (workplace + employment)

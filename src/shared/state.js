@@ -12,6 +12,7 @@ export const State = {
         SCRAPED_BUFFER: 'lisesca_scrapedBuffer',
         SEARCH_URL: 'lisesca_searchUrl',
         FORMATS: 'lisesca_formats',
+        INCLUDE_VIEWED: 'lisesca_includeViewed',
         // Job-specific state keys
         SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
         JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
@@ -67,6 +68,7 @@ export const State = {
             scrapedBuffer: this.getBuffer(),
             searchUrl: this.get(this.KEYS.SEARCH_URL, ''),
             formats: this.getFormats(),
+            includeViewed: this.getIncludeViewed(),
             scrapeMode: this.getScrapeMode(),
             jobIndex: this.get(this.KEYS.JOB_INDEX, 0),
             jobIdsOnPage: this.getJobIdsOnPage()
@@ -132,11 +134,31 @@ export const State = {
     },
 
     /**
+     * Read the "Include viewed" preference from the UI checkbox.
+     * @returns {boolean} True if viewed jobs should be included.
+     */
+    readIncludeViewedFromUI: function() {
+        var includeViewedCheck = document.getElementById('lisesca-include-viewed');
+        if (!includeViewedCheck) {
+            return true;
+        }
+        return includeViewedCheck.checked;
+    },
+
+    /**
      * Save selected export formats to persistent storage.
      * @param {Array<string>} formats - Array of format identifiers.
      */
     saveFormats: function(formats) {
         this.set(this.KEYS.FORMATS, JSON.stringify(formats));
+    },
+
+    /**
+     * Save the "Include viewed" preference to persistent storage.
+     * @param {boolean} includeViewed - True to include viewed jobs.
+     */
+    saveIncludeViewed: function(includeViewed) {
+        this.set(this.KEYS.INCLUDE_VIEWED, includeViewed === true);
     },
 
     /**
@@ -152,6 +174,15 @@ export const State = {
             console.warn('[LiSeSca] Failed to parse formats, defaulting to xlsx:', error);
             return ['xlsx'];
         }
+    },
+
+    /**
+     * Retrieve the saved "Include viewed" preference.
+     * Defaults to true if not set.
+     * @returns {boolean}
+     */
+    getIncludeViewed: function() {
+        return this.get(this.KEYS.INCLUDE_VIEWED, true);
     },
 
     /**

@@ -2,7 +2,7 @@
 // Default settings for the scraper. These can be overridden
 // by user preferences stored in Tampermonkey's persistent storage.
 export const CONFIG = {
-    VERSION: '0.3.10',
+    VERSION: '0.3.12',
     MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
     MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
     MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail

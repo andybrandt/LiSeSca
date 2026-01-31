@@ -1,6 +1,6 @@
 {
   "name": "lisesca",
-  "version": "0.3.10",
+  "version": "0.3.12",
   "description": "LinkedIn Search Scraper - Tampermonkey userscript",
   "scripts": {
     "build": "rollup -c"

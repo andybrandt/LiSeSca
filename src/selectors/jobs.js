@@ -10,6 +10,7 @@ export const JobSelectors = {
     CARD_COMPANY: '.artdeco-entity-lockup__subtitle span',
     CARD_METADATA: '.job-card-container__metadata-wrapper li span',
     CARD_INSIGHT: '.job-card-container__job-insight-text',
+    CARD_FOOTER_JOB_STATE: '.job-card-container__footer-job-state',
 
     // Right panel — detail view
     DETAIL_CONTAINER: '.jobs-search__job-details--container',
