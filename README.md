@@ -7,9 +7,13 @@ A [Tampermonkey](https://www.tampermonkey.net/) userscript that scrapes LinkedIn
 LiSeSca injects a floating control panel into LinkedIn search pages, letting you scrape structured data from:
 
 - **People search results** — name, connection degree, description, location, profile URL
-- **Job search results** — 15+ fields including job title, company, location, full job description (converted to Markdown), premium insights, and more
+- **Job search results** — 15+ fields including job title, company, location, full job description (converted to Markdown), premium insights, job state (Viewed/Applied), and more
 
 Scraped data can be exported in **XLSX**, **CSV** (people only), and **Markdown** formats.
+
+### AI Job Filtering (Optional)
+
+For job searches, LiSeSca can use **Claude AI** (Anthropic's API) to automatically filter out irrelevant job postings before downloading their full details. You describe your ideal job criteria, and the AI evaluates each job card — skipping jobs that clearly don't match (e.g., wrong industry, unrelated role type). This produces a more relevant output file and saves time reviewing unsuitable positions.
 
 ### Human Emulation
 
@@ -43,9 +47,12 @@ By default, Tampermonkey only allows scripts installed from its online repositor
 4. Choose how many pages to scrape:
    - **People search:** 1, 10, 50, or All pages
    - **Jobs search:** 1, 3, 5, or 10 pages
-5. Click **GO** to start scraping.
-6. The script will emulate human browsing on each page, then automatically navigate to the next page.
-7. When finished, a download dialog appears with your chosen export format.
+5. For jobs search, you have additional filtering options:
+   - **Include viewed** — uncheck to skip jobs marked as "Viewed" or "Applied"
+   - **AI job selection** — enable to use AI filtering (requires setup, see below)
+6. Click **GO** to start scraping.
+7. The script will emulate human browsing on each page, then automatically navigate to the next page.
+8. When finished, a download dialog appears with your chosen export format.
 
 ### Configuration
 
@@ -53,6 +60,36 @@ Click the gear icon next to the SCRAPE button to adjust timing parameters:
 - **Page time** — how long (in seconds) the script lingers on each search results page
 - **Job review time** — how long spent on each individual job detail (jobs mode)
 - **Job pause time** — delay between switching job cards (jobs mode)
+
+### AI Job Filtering Setup
+
+To use AI-powered job filtering, you need an **Anthropic API key**:
+
+1. Sign up at [console.anthropic.com](https://console.anthropic.com) and create an API key
+2. In LiSeSca, click the **gear icon** to open Configuration
+3. Click the **AI Filtering...** button to open the AI configuration panel
+4. Enter your **API Key** (starts with `sk-ant-`)
+5. In the **Job Criteria** textarea, describe the job you're looking for. Be specific about:
+   - Your target role and experience level
+   - Industries or domains you prefer
+   - What you explicitly **don't** want (this helps the AI filter effectively)
+6. Click **Save**
+
+**Example criteria:**
+```
+I am looking for Senior Software Engineering Manager roles.
+I have 15 years of experience in software development and team leadership.
+I prefer remote or hybrid positions in the tech industry.
+
+I am NOT interested in:
+- Manufacturing, industrial, or non-tech positions
+- Roles requiring domain expertise I don't have (e.g., healthcare, finance compliance)
+- Junior or mid-level positions
+```
+
+Once configured, the **AI job selection** checkbox appears in the jobs scrape menu. Enable it to activate AI filtering during scraping. The AI evaluates each job card before downloading details — jobs it deems irrelevant are skipped automatically.
+
+**Note:** AI filtering uses the Claude API, which has associated costs. Each job evaluation uses minimal tokens (the AI only sees the job card summary, not full descriptions). If the API is unavailable or returns an error, the job is downloaded anyway (fail-open design).
 
 ### Crash Recovery
 
