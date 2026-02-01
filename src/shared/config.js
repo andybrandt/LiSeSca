@@ -10,15 +10,20 @@ export const CONFIG = {
     MIN_JOB_PAUSE: 1,       // Minimum seconds to pause between jobs
     MAX_JOB_PAUSE: 3,       // Maximum seconds to pause between jobs
 
+    // AI filtering configuration (stored separately)
+    ANTHROPIC_API_KEY: '',  // User's Anthropic API key
+    JOB_CRITERIA: '',       // User's job search criteria (free-form text)
+
     /**
      * Load user-saved configuration from persistent storage.
      * Falls back to defaults defined above if nothing is saved.
      */
     load: function() {
-        const saved = GM_getValue('lisesca_config', null);
+        // Load timing configuration
+        var saved = GM_getValue('lisesca_config', null);
         if (saved) {
             try {
-                const parsed = JSON.parse(saved);
+                var parsed = JSON.parse(saved);
                 if (parsed.MIN_PAGE_TIME !== undefined) {
                     this.MIN_PAGE_TIME = parsed.MIN_PAGE_TIME;
                 }
@@ -41,21 +46,39 @@ export const CONFIG = {
                 console.warn('[LiSeSca] Failed to parse saved config, using defaults:', error);
             }
         }
+
+        // Load AI configuration (separate storage key)
+        var aiSaved = GM_getValue('lisesca_ai_config', null);
+        if (aiSaved) {
+            try {
+                var aiParsed = JSON.parse(aiSaved);
+                if (aiParsed.ANTHROPIC_API_KEY !== undefined) {
+                    this.ANTHROPIC_API_KEY = aiParsed.ANTHROPIC_API_KEY;
+                }
+                if (aiParsed.JOB_CRITERIA !== undefined) {
+                    this.JOB_CRITERIA = aiParsed.JOB_CRITERIA;
+                }
+            } catch (error) {
+                console.warn('[LiSeSca] Failed to parse saved AI config:', error);
+            }
+        }
+
         console.log('[LiSeSca] Config loaded:', {
             MIN_PAGE_TIME: this.MIN_PAGE_TIME,
             MAX_PAGE_TIME: this.MAX_PAGE_TIME,
             MIN_JOB_REVIEW_TIME: this.MIN_JOB_REVIEW_TIME,
             MAX_JOB_REVIEW_TIME: this.MAX_JOB_REVIEW_TIME,
             MIN_JOB_PAUSE: this.MIN_JOB_PAUSE,
-            MAX_JOB_PAUSE: this.MAX_JOB_PAUSE
+            MAX_JOB_PAUSE: this.MAX_JOB_PAUSE,
+            AI_CONFIGURED: !!(this.ANTHROPIC_API_KEY && this.JOB_CRITERIA)
         });
     },
 
     /**
-     * Save the current configuration to persistent storage.
+     * Save the current timing configuration to persistent storage.
      */
     save: function() {
-        const configData = JSON.stringify({
+        var configData = JSON.stringify({
             MIN_PAGE_TIME: this.MIN_PAGE_TIME,
             MAX_PAGE_TIME: this.MAX_PAGE_TIME,
             MIN_JOB_REVIEW_TIME: this.MIN_JOB_REVIEW_TIME,
@@ -65,5 +88,25 @@ export const CONFIG = {
         });
         GM_setValue('lisesca_config', configData);
         console.log('[LiSeSca] Config saved.');
+    },
+
+    /**
+     * Save the AI filtering configuration to persistent storage.
+     */
+    saveAIConfig: function() {
+        var aiConfigData = JSON.stringify({
+            ANTHROPIC_API_KEY: this.ANTHROPIC_API_KEY,
+            JOB_CRITERIA: this.JOB_CRITERIA
+        });
+        GM_setValue('lisesca_ai_config', aiConfigData);
+        console.log('[LiSeSca] AI config saved.');
+    },
+
+    /**
+     * Check if AI filtering is properly configured.
+     * @returns {boolean} True if both API key and criteria are set.
+     */
+    isAIConfigured: function() {
+        return !!(this.ANTHROPIC_API_KEY && this.JOB_CRITERIA);
     }
 };

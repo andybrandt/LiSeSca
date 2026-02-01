@@ -54,6 +54,7 @@ export const Controller = {
         // Create UI panels for the current page type
         UI.createPanel();
         UI.createConfigPanel();
+        UI.createAIConfigPanel();
 
         // Check if we have an active scraping session to resume
         if (State.isScraping()) {

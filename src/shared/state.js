@@ -13,6 +13,7 @@ export const State = {
         SEARCH_URL: 'lisesca_searchUrl',
         FORMATS: 'lisesca_formats',
         INCLUDE_VIEWED: 'lisesca_includeViewed',
+        AI_ENABLED: 'lisesca_aiEnabled',          // AI job filtering toggle
         // Job-specific state keys
         SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
         JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
@@ -183,6 +184,35 @@ export const State = {
      */
     getIncludeViewed: function() {
         return this.get(this.KEYS.INCLUDE_VIEWED, true);
+    },
+
+    /**
+     * Read the "AI job selection" preference from the UI checkbox.
+     * @returns {boolean} True if AI filtering is enabled.
+     */
+    readAIEnabledFromUI: function() {
+        var aiEnabledCheck = document.getElementById('lisesca-ai-enabled');
+        if (!aiEnabledCheck) {
+            return false;
+        }
+        return aiEnabledCheck.checked;
+    },
+
+    /**
+     * Save the "AI job selection" preference to persistent storage.
+     * @param {boolean} aiEnabled - True to enable AI filtering.
+     */
+    saveAIEnabled: function(aiEnabled) {
+        this.set(this.KEYS.AI_ENABLED, aiEnabled === true);
+    },
+
+    /**
+     * Retrieve the saved "AI job selection" preference.
+     * Defaults to false if not set.
+     * @returns {boolean}
+     */
+    getAIEnabled: function() {
+        return this.get(this.KEYS.AI_ENABLED, false);
     },
 
     /**

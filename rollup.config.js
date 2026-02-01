@@ -16,6 +16,8 @@ const banner = `// ==UserScript==
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @connect      api.anthropic.com
 // @require      https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
 // @require      https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js
 // @run-at       document-idle

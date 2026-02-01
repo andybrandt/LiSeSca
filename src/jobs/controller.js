@@ -13,6 +13,7 @@
 import { CONFIG } from '../shared/config.js';
 import { State } from '../shared/state.js';
 import { PageDetector } from '../shared/page-detector.js';
+import { AIClient } from '../shared/ai-client.js';
 import { UI } from '../ui/ui.js';
 import { Emulator } from '../people/emulator.js';
 import { JobExtractor } from './extractor.js';
@@ -47,6 +48,10 @@ export const JobController = {
         if (selectedFormats.length === 0) {
             selectedFormats = ['xlsx'];
         }
+
+        // Save AI enabled state from UI
+        var aiEnabled = State.readAIEnabledFromUI();
+        State.saveAIEnabled(aiEnabled);
 
         State.startSession(target, startPage, baseUrl, 'jobs');
         State.saveFormats(selectedFormats);
@@ -100,6 +105,11 @@ export const JobController = {
     scrapePage: function() {
         var self = this;
         var state = State.getScrapingState();
+
+        // Reset AI conversation for the new page (if AI filtering is enabled)
+        if (State.getAIEnabled() && AIClient.isConfigured()) {
+            AIClient.resetConversation();
+        }
 
         var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
         if (totalKnown > 0) {
@@ -190,6 +200,7 @@ export const JobController = {
         UI.showStatus(statusMsg);
 
         var includeViewed = State.getIncludeViewed();
+        var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
         var viewedCheck = includeViewed ? Promise.resolve(false) : JobExtractor.isJobViewed(jobId);
 
         viewedCheck.then(function(isViewed) {
@@ -206,6 +217,43 @@ export const JobController = {
                     return 'skip';
                 });
             }
+
+            // AI filtering: evaluate job card before downloading full details
+            if (aiEnabled) {
+                return JobExtractor.getRenderedCard(jobId).then(function(result) {
+                    if (!result.card) {
+                        // Can't get card data, proceed anyway
+                        console.log('[LiSeSca] AI filter: no card data, proceeding with job ' + jobId);
+                        return JobExtractor.extractFullJob(jobId);
+                    }
+
+                    var cardData = JobExtractor.extractCardBasics(result.card);
+                    var cardMarkdown = JobExtractor.formatCardForAI(cardData);
+
+                    UI.showStatus(statusMsg + ' — AI evaluating...');
+
+                    return AIClient.evaluateJob(cardMarkdown).then(function(shouldDownload) {
+                        if (!State.isScraping()) {
+                            return null;
+                        }
+
+                        if (!shouldDownload) {
+                            console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
+                            UI.showStatus(statusMsg + ' — AI: Skip');
+                            State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                            return Emulator.randomDelay(300, 600).then(function() {
+                                self.scrapeNextJob();
+                            }).then(function() {
+                                return 'skip';
+                            });
+                        }
+
+                        console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
+                        return JobExtractor.extractFullJob(jobId);
+                    });
+                });
+            }
+
             return JobExtractor.extractFullJob(jobId);
         }).then(function(job) {
             if (!State.isScraping()) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.11
+// @version      0.3.12
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -13,6 +13,8 @@
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @connect      api.anthropic.com
 // @require      https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
 // @require      https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js
 // @run-at       document-idle
@@ -25,7 +27,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.3.11',
+        VERSION: '0.3.12',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -33,15 +35,20 @@
         MIN_JOB_PAUSE: 1,       // Minimum seconds to pause between jobs
         MAX_JOB_PAUSE: 3,       // Maximum seconds to pause between jobs
 
+        // AI filtering configuration (stored separately)
+        ANTHROPIC_API_KEY: '',  // User's Anthropic API key
+        JOB_CRITERIA: '',       // User's job search criteria (free-form text)
+
         /**
          * Load user-saved configuration from persistent storage.
          * Falls back to defaults defined above if nothing is saved.
          */
         load: function() {
-            const saved = GM_getValue('lisesca_config', null);
+            // Load timing configuration
+            var saved = GM_getValue('lisesca_config', null);
             if (saved) {
                 try {
-                    const parsed = JSON.parse(saved);
+                    var parsed = JSON.parse(saved);
                     if (parsed.MIN_PAGE_TIME !== undefined) {
                         this.MIN_PAGE_TIME = parsed.MIN_PAGE_TIME;
                     }
@@ -64,21 +71,39 @@
                     console.warn('[LiSeSca] Failed to parse saved config, using defaults:', error);
                 }
             }
+
+            // Load AI configuration (separate storage key)
+            var aiSaved = GM_getValue('lisesca_ai_config', null);
+            if (aiSaved) {
+                try {
+                    var aiParsed = JSON.parse(aiSaved);
+                    if (aiParsed.ANTHROPIC_API_KEY !== undefined) {
+                        this.ANTHROPIC_API_KEY = aiParsed.ANTHROPIC_API_KEY;
+                    }
+                    if (aiParsed.JOB_CRITERIA !== undefined) {
+                        this.JOB_CRITERIA = aiParsed.JOB_CRITERIA;
+                    }
+                } catch (error) {
+                    console.warn('[LiSeSca] Failed to parse saved AI config:', error);
+                }
+            }
+
             console.log('[LiSeSca] Config loaded:', {
                 MIN_PAGE_TIME: this.MIN_PAGE_TIME,
                 MAX_PAGE_TIME: this.MAX_PAGE_TIME,
                 MIN_JOB_REVIEW_TIME: this.MIN_JOB_REVIEW_TIME,
                 MAX_JOB_REVIEW_TIME: this.MAX_JOB_REVIEW_TIME,
                 MIN_JOB_PAUSE: this.MIN_JOB_PAUSE,
-                MAX_JOB_PAUSE: this.MAX_JOB_PAUSE
+                MAX_JOB_PAUSE: this.MAX_JOB_PAUSE,
+                AI_CONFIGURED: !!(this.ANTHROPIC_API_KEY && this.JOB_CRITERIA)
             });
         },
 
         /**
-         * Save the current configuration to persistent storage.
+         * Save the current timing configuration to persistent storage.
          */
         save: function() {
-            const configData = JSON.stringify({
+            var configData = JSON.stringify({
                 MIN_PAGE_TIME: this.MIN_PAGE_TIME,
                 MAX_PAGE_TIME: this.MAX_PAGE_TIME,
                 MIN_JOB_REVIEW_TIME: this.MIN_JOB_REVIEW_TIME,
@@ -88,6 +113,26 @@
             });
             GM_setValue('lisesca_config', configData);
             console.log('[LiSeSca] Config saved.');
+        },
+
+        /**
+         * Save the AI filtering configuration to persistent storage.
+         */
+        saveAIConfig: function() {
+            var aiConfigData = JSON.stringify({
+                ANTHROPIC_API_KEY: this.ANTHROPIC_API_KEY,
+                JOB_CRITERIA: this.JOB_CRITERIA
+            });
+            GM_setValue('lisesca_ai_config', aiConfigData);
+            console.log('[LiSeSca] AI config saved.');
+        },
+
+        /**
+         * Check if AI filtering is properly configured.
+         * @returns {boolean} True if both API key and criteria are set.
+         */
+        isAIConfigured: function() {
+            return !!(this.ANTHROPIC_API_KEY && this.JOB_CRITERIA);
         }
     };
 
@@ -106,6 +151,7 @@
             SEARCH_URL: 'lisesca_searchUrl',
             FORMATS: 'lisesca_formats',
             INCLUDE_VIEWED: 'lisesca_includeViewed',
+            AI_ENABLED: 'lisesca_aiEnabled',          // AI job filtering toggle
             // Job-specific state keys
             SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
             JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
@@ -276,6 +322,35 @@
          */
         getIncludeViewed: function() {
             return this.get(this.KEYS.INCLUDE_VIEWED, true);
+        },
+
+        /**
+         * Read the "AI job selection" preference from the UI checkbox.
+         * @returns {boolean} True if AI filtering is enabled.
+         */
+        readAIEnabledFromUI: function() {
+            var aiEnabledCheck = document.getElementById('lisesca-ai-enabled');
+            if (!aiEnabledCheck) {
+                return false;
+            }
+            return aiEnabledCheck.checked;
+        },
+
+        /**
+         * Save the "AI job selection" preference to persistent storage.
+         * @param {boolean} aiEnabled - True to enable AI filtering.
+         */
+        saveAIEnabled: function(aiEnabled) {
+            this.set(this.KEYS.AI_ENABLED, aiEnabled === true);
+        },
+
+        /**
+         * Retrieve the saved "AI job selection" preference.
+         * Defaults to false if not set.
+         * @returns {boolean}
+         */
+        getAIEnabled: function() {
+            return this.get(this.KEYS.AI_ENABLED, false);
         },
 
         /**
@@ -962,6 +1037,166 @@
             .lisesca-config-cancel:hover {
                 background: #30363d;
             }
+
+            /* ---- AI Configuration overlay ---- */
+            .lisesca-ai-config-overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 10002;
+                justify-content: center;
+                align-items: center;
+            }
+            .lisesca-ai-config-overlay.lisesca-visible {
+                display: flex;
+            }
+
+            .lisesca-ai-config-panel {
+                background: #1b1f23;
+                color: #e1e4e8;
+                border-radius: 10px;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+                padding: 20px 24px;
+                width: 400px;
+                max-width: 90vw;
+                max-height: 90vh;
+                overflow-y: auto;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 13px;
+            }
+
+            .lisesca-ai-config-title {
+                font-size: 15px;
+                font-weight: 600;
+                margin-bottom: 16px;
+                color: #f0f6fc;
+            }
+
+            .lisesca-ai-config-row {
+                margin-bottom: 14px;
+            }
+
+            .lisesca-ai-config-row label {
+                display: block;
+                font-size: 11px;
+                color: #8b949e;
+                margin-bottom: 4px;
+            }
+
+            .lisesca-ai-config-row input[type="password"],
+            .lisesca-ai-config-row input[type="text"] {
+                width: 100%;
+                background: #0d1117;
+                color: #e1e4e8;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 8px 10px;
+                font-size: 13px;
+                box-sizing: border-box;
+            }
+            .lisesca-ai-config-row input:focus {
+                outline: none;
+                border-color: #58a6ff;
+            }
+
+            .lisesca-ai-config-row textarea {
+                width: 100%;
+                background: #0d1117;
+                color: #e1e4e8;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 8px 10px;
+                font-size: 13px;
+                font-family: inherit;
+                box-sizing: border-box;
+                resize: vertical;
+                min-height: 200px;
+            }
+            .lisesca-ai-config-row textarea:focus {
+                outline: none;
+                border-color: #58a6ff;
+            }
+
+            .lisesca-ai-config-row .lisesca-hint {
+                font-size: 10px;
+                color: #6e7681;
+                margin-top: 4px;
+            }
+
+            .lisesca-ai-config-error {
+                color: #f85149;
+                font-size: 11px;
+                margin-top: 4px;
+                min-height: 16px;
+            }
+
+            .lisesca-ai-config-buttons {
+                display: flex;
+                gap: 8px;
+                margin-top: 16px;
+            }
+
+            .lisesca-ai-config-save {
+                flex: 1;
+                background: #1f6feb;
+                color: #ffffff;
+                border: none;
+                border-radius: 5px;
+                padding: 7px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-ai-config-save:hover {
+                background: #388bfd;
+            }
+
+            .lisesca-ai-config-cancel {
+                flex: 1;
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+                border-radius: 5px;
+                padding: 7px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-ai-config-cancel:hover {
+                background: #30363d;
+            }
+
+            /* Button to open AI config from main config panel */
+            .lisesca-ai-config-btn {
+                width: 100%;
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+                border-radius: 5px;
+                padding: 7px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-ai-config-btn:hover {
+                background: #30363d;
+            }
+
+            /* AI toggle in scrape menu - disabled state */
+            .lisesca-checkbox-label.lisesca-disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+            .lisesca-checkbox-label.lisesca-disabled input[type="checkbox"] {
+                cursor: not-allowed;
+            }
         `);
         },
 
@@ -1106,6 +1341,8 @@
 
             var includeViewedRow = null;
             var includeViewedCheck = null;
+            var aiEnabledRow = null;
+            var aiEnabledCheck = null;
             if (isJobs) {
                 includeViewedRow = document.createElement('div');
                 includeViewedRow.className = 'lisesca-toggle-row';
@@ -1122,6 +1359,31 @@
                 includeViewedLabel.appendChild(includeViewedCheck);
                 includeViewedLabel.appendChild(document.createTextNode('Include viewed'));
                 includeViewedRow.appendChild(includeViewedLabel);
+
+                // AI job selection toggle
+                aiEnabledRow = document.createElement('div');
+                aiEnabledRow.className = 'lisesca-toggle-row';
+
+                var aiEnabledLabel = document.createElement('label');
+                aiEnabledLabel.className = 'lisesca-checkbox-label';
+
+                // Disable if AI is not configured
+                var aiConfigured = CONFIG.isAIConfigured();
+                if (!aiConfigured) {
+                    aiEnabledLabel.classList.add('lisesca-disabled');
+                }
+
+                aiEnabledCheck = document.createElement('input');
+                aiEnabledCheck.type = 'checkbox';
+                aiEnabledCheck.id = 'lisesca-ai-enabled';
+                aiEnabledCheck.checked = aiConfigured && State.getAIEnabled();
+                aiEnabledCheck.disabled = !aiConfigured;
+                aiEnabledCheck.addEventListener('change', function() {
+                    State.saveAIEnabled(aiEnabledCheck.checked);
+                });
+                aiEnabledLabel.appendChild(aiEnabledCheck);
+                aiEnabledLabel.appendChild(document.createTextNode('AI job selection'));
+                aiEnabledRow.appendChild(aiEnabledLabel);
             }
 
             // GO button — dispatches to the correct controller
@@ -1147,6 +1409,9 @@
             this.menu.appendChild(fmtRow);
             if (includeViewedRow) {
                 this.menu.appendChild(includeViewedRow);
+            }
+            if (aiEnabledRow) {
+                this.menu.appendChild(aiEnabledRow);
             }
             this.menu.appendChild(goBtn);
 
@@ -1283,6 +1548,9 @@
         // --- Configuration panel ---
         configOverlay: null,
 
+        // --- AI Configuration panel ---
+        aiConfigOverlay: null,
+
         /**
          * Create the configuration panel overlay.
          */
@@ -1408,6 +1676,24 @@
             jobPauseMaxRow.appendChild(jobPauseMaxLabel);
             jobPauseMaxRow.appendChild(jobPauseMaxInput);
 
+            // --- AI Filtering section ---
+            var aiSectionLabel = document.createElement('div');
+            aiSectionLabel.className = 'lisesca-config-section';
+            aiSectionLabel.textContent = 'AI Job Filtering';
+
+            var aiConfigBtnRow = document.createElement('div');
+            aiConfigBtnRow.className = 'lisesca-config-row';
+
+            var aiConfigBtn = document.createElement('button');
+            aiConfigBtn.className = 'lisesca-ai-config-btn';
+            aiConfigBtn.textContent = 'AI Filtering...';
+            aiConfigBtn.addEventListener('click', function() {
+                UI.hideConfig();
+                UI.showAIConfig();
+            });
+
+            aiConfigBtnRow.appendChild(aiConfigBtn);
+
             var errorDiv = document.createElement('div');
             errorDiv.className = 'lisesca-config-error';
             errorDiv.id = 'lisesca-config-error';
@@ -1447,6 +1733,8 @@
             panel.appendChild(jobReviewMaxRow);
             panel.appendChild(jobPauseMinRow);
             panel.appendChild(jobPauseMaxRow);
+            panel.appendChild(aiSectionLabel);
+            panel.appendChild(aiConfigBtnRow);
             panel.appendChild(errorDiv);
             panel.appendChild(buttonsRow);
 
@@ -1562,6 +1850,184 @@
             this.hideConfig();
         },
 
+        // --- AI Configuration panel methods ---
+
+        /**
+         * Create the AI configuration panel overlay.
+         */
+        createAIConfigPanel: function() {
+            this.aiConfigOverlay = document.createElement('div');
+            this.aiConfigOverlay.className = 'lisesca-ai-config-overlay';
+
+            var panel = document.createElement('div');
+            panel.className = 'lisesca-ai-config-panel';
+
+            var title = document.createElement('div');
+            title.className = 'lisesca-ai-config-title';
+            title.textContent = 'AI Job Filtering Configuration';
+
+            // API Key row
+            var apiKeyRow = document.createElement('div');
+            apiKeyRow.className = 'lisesca-ai-config-row';
+
+            var apiKeyLabel = document.createElement('label');
+            apiKeyLabel.textContent = 'Anthropic API Key:';
+            apiKeyLabel.htmlFor = 'lisesca-ai-api-key';
+
+            var apiKeyInput = document.createElement('input');
+            apiKeyInput.type = 'password';
+            apiKeyInput.id = 'lisesca-ai-api-key';
+            apiKeyInput.placeholder = 'sk-ant-...';
+            apiKeyInput.value = CONFIG.ANTHROPIC_API_KEY || '';
+
+            var apiKeyHint = document.createElement('div');
+            apiKeyHint.className = 'lisesca-hint';
+            apiKeyHint.textContent = 'Get your API key from console.anthropic.com';
+
+            apiKeyRow.appendChild(apiKeyLabel);
+            apiKeyRow.appendChild(apiKeyInput);
+            apiKeyRow.appendChild(apiKeyHint);
+
+            // Job Criteria row
+            var criteriaRow = document.createElement('div');
+            criteriaRow.className = 'lisesca-ai-config-row';
+
+            var criteriaLabel = document.createElement('label');
+            criteriaLabel.textContent = 'Job Search Criteria:';
+            criteriaLabel.htmlFor = 'lisesca-ai-criteria';
+
+            var criteriaTextarea = document.createElement('textarea');
+            criteriaTextarea.id = 'lisesca-ai-criteria';
+            criteriaTextarea.rows = 12;
+            criteriaTextarea.placeholder = 'Describe the job you are looking for...\n\nExample:\nI am looking for Senior Software Engineering Manager roles.\nI have 15 years of experience in software development.\nI prefer remote or hybrid positions.\nI am NOT interested in:\n- Manufacturing or industrial positions\n- Roles requiring specific domain expertise I don\'t have';
+            criteriaTextarea.value = CONFIG.JOB_CRITERIA || '';
+
+            var criteriaHint = document.createElement('div');
+            criteriaHint.className = 'lisesca-hint';
+            criteriaHint.textContent = 'Describe your ideal job. Be specific about what you want and don\'t want.';
+
+            criteriaRow.appendChild(criteriaLabel);
+            criteriaRow.appendChild(criteriaTextarea);
+            criteriaRow.appendChild(criteriaHint);
+
+            // Error display
+            var errorDiv = document.createElement('div');
+            errorDiv.className = 'lisesca-ai-config-error';
+            errorDiv.id = 'lisesca-ai-config-error';
+
+            // Buttons
+            var buttonsRow = document.createElement('div');
+            buttonsRow.className = 'lisesca-ai-config-buttons';
+
+            var saveBtn = document.createElement('button');
+            saveBtn.className = 'lisesca-ai-config-save';
+            saveBtn.textContent = 'Save';
+            saveBtn.addEventListener('click', function() {
+                UI.saveAIConfig();
+            });
+
+            var cancelBtn = document.createElement('button');
+            cancelBtn.className = 'lisesca-ai-config-cancel';
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.addEventListener('click', function() {
+                UI.hideAIConfig();
+            });
+
+            buttonsRow.appendChild(saveBtn);
+            buttonsRow.appendChild(cancelBtn);
+
+            // Assemble panel
+            panel.appendChild(title);
+            panel.appendChild(apiKeyRow);
+            panel.appendChild(criteriaRow);
+            panel.appendChild(errorDiv);
+            panel.appendChild(buttonsRow);
+
+            this.aiConfigOverlay.appendChild(panel);
+
+            // Close on overlay click
+            this.aiConfigOverlay.addEventListener('click', function(event) {
+                if (event.target === UI.aiConfigOverlay) {
+                    UI.hideAIConfig();
+                }
+            });
+
+            document.body.appendChild(this.aiConfigOverlay);
+        },
+
+        /**
+         * Show the AI configuration panel.
+         */
+        showAIConfig: function() {
+            document.getElementById('lisesca-ai-api-key').value = CONFIG.ANTHROPIC_API_KEY || '';
+            document.getElementById('lisesca-ai-criteria').value = CONFIG.JOB_CRITERIA || '';
+            document.getElementById('lisesca-ai-config-error').textContent = '';
+            this.aiConfigOverlay.classList.add('lisesca-visible');
+        },
+
+        /**
+         * Hide the AI configuration panel.
+         */
+        hideAIConfig: function() {
+            this.aiConfigOverlay.classList.remove('lisesca-visible');
+        },
+
+        /**
+         * Validate and save AI configuration.
+         */
+        saveAIConfig: function() {
+            var errorDiv = document.getElementById('lisesca-ai-config-error');
+            var apiKey = document.getElementById('lisesca-ai-api-key').value.trim();
+            var criteria = document.getElementById('lisesca-ai-criteria').value.trim();
+
+            // Both must be filled or both empty (to disable AI filtering)
+            if ((apiKey && !criteria) || (!apiKey && criteria)) {
+                errorDiv.textContent = 'Please fill in both fields, or leave both empty to disable AI filtering.';
+                return;
+            }
+
+            // Basic API key format validation
+            if (apiKey && !apiKey.startsWith('sk-ant-')) {
+                errorDiv.textContent = 'API key should start with "sk-ant-"';
+                return;
+            }
+
+            // Save to CONFIG
+            CONFIG.ANTHROPIC_API_KEY = apiKey;
+            CONFIG.JOB_CRITERIA = criteria;
+            CONFIG.saveAIConfig();
+
+            // Update the AI toggle state in the menu if it exists
+            this.updateAIToggleState();
+
+            console.log('[LiSeSca] AI config saved. Configured: ' + CONFIG.isAIConfigured());
+            this.hideAIConfig();
+        },
+
+        /**
+         * Update the AI toggle checkbox state based on configuration.
+         * Disables the checkbox if AI is not configured.
+         */
+        updateAIToggleState: function() {
+            var aiCheck = document.getElementById('lisesca-ai-enabled');
+            var aiLabel = aiCheck ? aiCheck.closest('.lisesca-checkbox-label') : null;
+
+            if (!aiCheck || !aiLabel) {
+                return;
+            }
+
+            var isConfigured = CONFIG.isAIConfigured();
+            aiCheck.disabled = !isConfigured;
+
+            if (isConfigured) {
+                aiLabel.classList.remove('lisesca-disabled');
+            } else {
+                aiLabel.classList.add('lisesca-disabled');
+                aiCheck.checked = false;
+                State.saveAIEnabled(false);
+            }
+        },
+
         // --- SPA Navigation Support ---
 
         /**
@@ -1598,14 +2064,27 @@
         },
 
         /**
+         * Remove the AI configuration overlay from the DOM.
+         */
+        removeAIConfigPanel: function() {
+            if (this.aiConfigOverlay && this.aiConfigOverlay.parentNode) {
+                this.aiConfigOverlay.parentNode.removeChild(this.aiConfigOverlay);
+                console.log('[LiSeSca] AI config panel removed.');
+            }
+            this.aiConfigOverlay = null;
+        },
+
+        /**
          * Remove existing panels and create fresh ones for the current page type.
          * Used when SPA navigation changes the page type.
          */
         rebuildPanel: function() {
             this.removePanel();
             this.removeConfigPanel();
+            this.removeAIConfigPanel();
             this.createPanel();
             this.createConfigPanel();
+            this.createAIConfigPanel();
             console.log('[LiSeSca] UI panels rebuilt for new page.');
         }
     };
@@ -2248,6 +2727,240 @@
         }
     };
 
+    // ===== AI CLIENT =====
+    // Handles communication with Anthropic's Claude API for job filtering.
+    // Uses GM_xmlhttpRequest for cross-origin API calls (Tampermonkey requirement).
+    // Maintains conversation history per page to reduce token usage.
+
+
+    /** System prompt that instructs Claude how to evaluate jobs */
+    const SYSTEM_PROMPT = `You are a job relevance filter. Your task is to quickly decide whether a job posting is worth downloading for detailed review, based on the user's job search criteria.
+
+DECISION RULES:
+- Return download: true if the job COULD be relevant based on the limited card information shown
+- Return download: false ONLY if the job is CLEARLY irrelevant (e.g., completely wrong industry, wrong role type, obviously unrelated field)
+- When uncertain, return true — it's better to review an extra job than miss a good one
+
+You will receive the user's criteria first, then job cards one at a time. Each card has only basic info: title, company, location. Make quick decisions based on this limited information.`;
+
+    /** Tool definition that forces structured boolean response */
+    const JOB_EVALUATION_TOOL = {
+        name: 'job_evaluation',
+        description: 'Indicate whether this job should be downloaded for detailed review',
+        input_schema: {
+            type: 'object',
+            properties: {
+                download: {
+                    type: 'boolean',
+                    description: 'true if job matches criteria, false if clearly irrelevant'
+                }
+            },
+            required: ['download']
+        }
+    };
+
+    const AIClient = {
+        /** Conversation history for the current page */
+        conversationHistory: [],
+
+        /** Flag indicating if the conversation has been initialized with criteria */
+        isInitialized: false,
+
+        /**
+         * Check if the AI client is properly configured with API key and criteria.
+         * @returns {boolean} True if both API key and criteria are set.
+         */
+        isConfigured: function() {
+            return !!(CONFIG.ANTHROPIC_API_KEY && CONFIG.JOB_CRITERIA);
+        },
+
+        /**
+         * Reset the conversation history. Called at the start of each page.
+         */
+        resetConversation: function() {
+            this.conversationHistory = [];
+            this.isInitialized = false;
+            console.log('[LiSeSca] AI conversation reset for new page.');
+        },
+
+        /**
+         * Initialize the conversation with user criteria.
+         * Creates the initial message exchange that sets up the context.
+         * @returns {Promise<void>}
+         */
+        initConversation: function() {
+            if (this.isInitialized) {
+                return Promise.resolve();
+            }
+
+            // Set up the initial conversation with criteria
+            this.conversationHistory = [
+                {
+                    role: 'user',
+                    content: 'My job search criteria:\n\n' + CONFIG.JOB_CRITERIA + '\n\nI will send you job cards one at a time. Evaluate each one using the job_evaluation tool.'
+                },
+                {
+                    role: 'assistant',
+                    content: [
+                        {
+                            type: 'tool_use',
+                            id: 'init_ack',
+                            name: 'job_evaluation',
+                            input: { download: true }
+                        }
+                    ]
+                },
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'tool_result',
+                            tool_use_id: 'init_ack',
+                            content: 'Ready to evaluate jobs.'
+                        }
+                    ]
+                }
+            ];
+
+            this.isInitialized = true;
+            console.log('[LiSeSca] AI conversation initialized with criteria.');
+            return Promise.resolve();
+        },
+
+        /**
+         * Evaluate a job card to determine if it should be downloaded.
+         * @param {string} cardMarkdown - The job card formatted as Markdown.
+         * @returns {Promise<boolean>} True if the job should be downloaded, false to skip.
+         */
+        evaluateJob: function(cardMarkdown) {
+            var self = this;
+
+            if (!this.isConfigured()) {
+                console.warn('[LiSeSca] AI client not configured, allowing job.');
+                return Promise.resolve(true);
+            }
+
+            return this.initConversation().then(function() {
+                return self.sendJobForEvaluation(cardMarkdown);
+            }).catch(function(error) {
+                console.error('[LiSeSca] AI evaluation error, allowing job:', error);
+                return true; // Fail-open: download the job on error
+            });
+        },
+
+        /**
+         * Send a job card to Claude for evaluation.
+         * @param {string} cardMarkdown - The job card formatted as Markdown.
+         * @returns {Promise<boolean>} True if the job should be downloaded.
+         */
+        sendJobForEvaluation: function(cardMarkdown) {
+            var self = this;
+
+            // Add the job card to the conversation
+            var messagesWithJob = this.conversationHistory.concat([
+                { role: 'user', content: cardMarkdown }
+            ]);
+
+            var requestBody = {
+                model: 'claude-sonnet-4-5-20250929',
+                max_tokens: 100,
+                system: SYSTEM_PROMPT,
+                tools: [JOB_EVALUATION_TOOL],
+                tool_choice: { type: 'tool', name: 'job_evaluation' },
+                messages: messagesWithJob
+            };
+
+            return new Promise(function(resolve, reject) {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://api.anthropic.com/v1/messages',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': CONFIG.ANTHROPIC_API_KEY,
+                        'anthropic-version': '2023-06-01'
+                    },
+                    data: JSON.stringify(requestBody),
+                    onload: function(response) {
+                        self.handleApiResponse(response, cardMarkdown, resolve, reject);
+                    },
+                    onerror: function(error) {
+                        console.error('[LiSeSca] AI API request failed:', error);
+                        reject(new Error('Network error'));
+                    },
+                    ontimeout: function() {
+                        console.error('[LiSeSca] AI API request timed out');
+                        reject(new Error('Request timeout'));
+                    },
+                    timeout: 30000 // 30 second timeout
+                });
+            });
+        },
+
+        /**
+         * Handle the API response and extract the evaluation result.
+         * @param {Object} response - The GM_xmlhttpRequest response object.
+         * @param {string} cardMarkdown - The original job card (for logging).
+         * @param {Function} resolve - Promise resolve function.
+         * @param {Function} reject - Promise reject function.
+         */
+        handleApiResponse: function(response, cardMarkdown, resolve, reject) {
+            if (response.status !== 200) {
+                console.error('[LiSeSca] AI API error:', response.status, response.responseText);
+                // Fail-open: allow the job on API errors
+                resolve(true);
+                return;
+            }
+
+            try {
+                var data = JSON.parse(response.responseText);
+
+                // Find the tool_use content block
+                var toolUse = null;
+                if (data.content && Array.isArray(data.content)) {
+                    for (var i = 0; i < data.content.length; i++) {
+                        if (data.content[i].type === 'tool_use') {
+                            toolUse = data.content[i];
+                            break;
+                        }
+                    }
+                }
+
+                if (!toolUse || toolUse.name !== 'job_evaluation') {
+                    console.warn('[LiSeSca] Unexpected AI response format, allowing job.');
+                    resolve(true);
+                    return;
+                }
+
+                var shouldDownload = toolUse.input.download === true;
+
+                // Update conversation history with this exchange
+                this.conversationHistory.push({ role: 'user', content: cardMarkdown });
+                this.conversationHistory.push({
+                    role: 'assistant',
+                    content: [toolUse]
+                });
+                // Add tool result to complete the exchange
+                this.conversationHistory.push({
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'tool_result',
+                            tool_use_id: toolUse.id,
+                            content: shouldDownload ? 'Job queued for download.' : 'Job skipped.'
+                        }
+                    ]
+                });
+
+                console.log('[LiSeSca] AI evaluation: ' + (shouldDownload ? 'DOWNLOAD' : 'SKIP'));
+                resolve(shouldDownload);
+
+            } catch (error) {
+                console.error('[LiSeSca] Failed to parse AI response:', error);
+                resolve(true); // Fail-open
+            }
+        }
+    };
+
     // ===== TURNDOWN SERVICE =====
     // Shared HTML-to-Markdown converter instance for job descriptions.
     // Turndown is loaded via @require from CDN.
@@ -2558,6 +3271,26 @@
                 viewed: viewed,
                 jobState: stateText
             };
+        },
+
+        /**
+         * Format job card basics as Markdown for AI evaluation.
+         * Produces a concise summary for the AI to evaluate relevance.
+         * @param {Object} cardData - The card data from extractCardBasics.
+         * @returns {string} Markdown-formatted job card summary.
+         */
+        formatCardForAI: function(cardData) {
+            var lines = [
+                '## ' + (cardData.jobTitle || 'Unknown Title'),
+                '**Company:** ' + (cardData.company || 'Unknown'),
+                '**Location:** ' + (cardData.location || 'Not specified')
+            ];
+
+            if (cardData.cardInsight) {
+                lines.push('**Insight:** ' + cardData.cardInsight);
+            }
+
+            return lines.join('\n');
         },
 
         /**
@@ -3359,6 +4092,10 @@
                 selectedFormats = ['xlsx'];
             }
 
+            // Save AI enabled state from UI
+            var aiEnabled = State.readAIEnabledFromUI();
+            State.saveAIEnabled(aiEnabled);
+
             State.startSession(target, startPage, baseUrl, 'jobs');
             State.saveFormats(selectedFormats);
 
@@ -3411,6 +4148,11 @@
         scrapePage: function() {
             var self = this;
             var state = State.getScrapingState();
+
+            // Reset AI conversation for the new page (if AI filtering is enabled)
+            if (State.getAIEnabled() && AIClient.isConfigured()) {
+                AIClient.resetConversation();
+            }
 
             var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
             if (totalKnown > 0) {
@@ -3501,6 +4243,7 @@
             UI.showStatus(statusMsg);
 
             var includeViewed = State.getIncludeViewed();
+            var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
             var viewedCheck = includeViewed ? Promise.resolve(false) : JobExtractor.isJobViewed(jobId);
 
             viewedCheck.then(function(isViewed) {
@@ -3517,6 +4260,43 @@
                         return 'skip';
                     });
                 }
+
+                // AI filtering: evaluate job card before downloading full details
+                if (aiEnabled) {
+                    return JobExtractor.getRenderedCard(jobId).then(function(result) {
+                        if (!result.card) {
+                            // Can't get card data, proceed anyway
+                            console.log('[LiSeSca] AI filter: no card data, proceeding with job ' + jobId);
+                            return JobExtractor.extractFullJob(jobId);
+                        }
+
+                        var cardData = JobExtractor.extractCardBasics(result.card);
+                        var cardMarkdown = JobExtractor.formatCardForAI(cardData);
+
+                        UI.showStatus(statusMsg + ' — AI evaluating...');
+
+                        return AIClient.evaluateJob(cardMarkdown).then(function(shouldDownload) {
+                            if (!State.isScraping()) {
+                                return null;
+                            }
+
+                            if (!shouldDownload) {
+                                console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
+                                UI.showStatus(statusMsg + ' — AI: Skip');
+                                State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                return Emulator.randomDelay(300, 600).then(function() {
+                                    self.scrapeNextJob();
+                                }).then(function() {
+                                    return 'skip';
+                                });
+                            }
+
+                            console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
+                            return JobExtractor.extractFullJob(jobId);
+                        });
+                    });
+                }
+
                 return JobExtractor.extractFullJob(jobId);
             }).then(function(job) {
                 if (!State.isScraping()) {
@@ -3710,6 +4490,7 @@
             // Create UI panels for the current page type
             UI.createPanel();
             UI.createConfigPanel();
+            UI.createAIConfigPanel();
 
             // Check if we have an active scraping session to resume
             if (State.isScraping()) {

@@ -237,6 +237,26 @@ export const JobExtractor = {
     },
 
     /**
+     * Format job card basics as Markdown for AI evaluation.
+     * Produces a concise summary for the AI to evaluate relevance.
+     * @param {Object} cardData - The card data from extractCardBasics.
+     * @returns {string} Markdown-formatted job card summary.
+     */
+    formatCardForAI: function(cardData) {
+        var lines = [
+            '## ' + (cardData.jobTitle || 'Unknown Title'),
+            '**Company:** ' + (cardData.company || 'Unknown'),
+            '**Location:** ' + (cardData.location || 'Not specified')
+        ];
+
+        if (cardData.cardInsight) {
+            lines.push('**Insight:** ' + cardData.cardInsight);
+        }
+
+        return lines.join('\n');
+    },
+
+    /**
      * Click a job card to load its detail panel on the right.
      * LinkedIn virtualizes the job list — only ~7-8 cards have rendered
      * inner content at a time. The rest are empty <li> shells with

@@ -364,6 +364,166 @@ export const UI = {
             .lisesca-config-cancel:hover {
                 background: #30363d;
             }
+
+            /* ---- AI Configuration overlay ---- */
+            .lisesca-ai-config-overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 10002;
+                justify-content: center;
+                align-items: center;
+            }
+            .lisesca-ai-config-overlay.lisesca-visible {
+                display: flex;
+            }
+
+            .lisesca-ai-config-panel {
+                background: #1b1f23;
+                color: #e1e4e8;
+                border-radius: 10px;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+                padding: 20px 24px;
+                width: 400px;
+                max-width: 90vw;
+                max-height: 90vh;
+                overflow-y: auto;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 13px;
+            }
+
+            .lisesca-ai-config-title {
+                font-size: 15px;
+                font-weight: 600;
+                margin-bottom: 16px;
+                color: #f0f6fc;
+            }
+
+            .lisesca-ai-config-row {
+                margin-bottom: 14px;
+            }
+
+            .lisesca-ai-config-row label {
+                display: block;
+                font-size: 11px;
+                color: #8b949e;
+                margin-bottom: 4px;
+            }
+
+            .lisesca-ai-config-row input[type="password"],
+            .lisesca-ai-config-row input[type="text"] {
+                width: 100%;
+                background: #0d1117;
+                color: #e1e4e8;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 8px 10px;
+                font-size: 13px;
+                box-sizing: border-box;
+            }
+            .lisesca-ai-config-row input:focus {
+                outline: none;
+                border-color: #58a6ff;
+            }
+
+            .lisesca-ai-config-row textarea {
+                width: 100%;
+                background: #0d1117;
+                color: #e1e4e8;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 8px 10px;
+                font-size: 13px;
+                font-family: inherit;
+                box-sizing: border-box;
+                resize: vertical;
+                min-height: 200px;
+            }
+            .lisesca-ai-config-row textarea:focus {
+                outline: none;
+                border-color: #58a6ff;
+            }
+
+            .lisesca-ai-config-row .lisesca-hint {
+                font-size: 10px;
+                color: #6e7681;
+                margin-top: 4px;
+            }
+
+            .lisesca-ai-config-error {
+                color: #f85149;
+                font-size: 11px;
+                margin-top: 4px;
+                min-height: 16px;
+            }
+
+            .lisesca-ai-config-buttons {
+                display: flex;
+                gap: 8px;
+                margin-top: 16px;
+            }
+
+            .lisesca-ai-config-save {
+                flex: 1;
+                background: #1f6feb;
+                color: #ffffff;
+                border: none;
+                border-radius: 5px;
+                padding: 7px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-ai-config-save:hover {
+                background: #388bfd;
+            }
+
+            .lisesca-ai-config-cancel {
+                flex: 1;
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+                border-radius: 5px;
+                padding: 7px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-ai-config-cancel:hover {
+                background: #30363d;
+            }
+
+            /* Button to open AI config from main config panel */
+            .lisesca-ai-config-btn {
+                width: 100%;
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+                border-radius: 5px;
+                padding: 7px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-ai-config-btn:hover {
+                background: #30363d;
+            }
+
+            /* AI toggle in scrape menu - disabled state */
+            .lisesca-checkbox-label.lisesca-disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+            .lisesca-checkbox-label.lisesca-disabled input[type="checkbox"] {
+                cursor: not-allowed;
+            }
         `);
     },
 
@@ -508,6 +668,8 @@ export const UI = {
 
         var includeViewedRow = null;
         var includeViewedCheck = null;
+        var aiEnabledRow = null;
+        var aiEnabledCheck = null;
         if (isJobs) {
             includeViewedRow = document.createElement('div');
             includeViewedRow.className = 'lisesca-toggle-row';
@@ -524,6 +686,31 @@ export const UI = {
             includeViewedLabel.appendChild(includeViewedCheck);
             includeViewedLabel.appendChild(document.createTextNode('Include viewed'));
             includeViewedRow.appendChild(includeViewedLabel);
+
+            // AI job selection toggle
+            aiEnabledRow = document.createElement('div');
+            aiEnabledRow.className = 'lisesca-toggle-row';
+
+            var aiEnabledLabel = document.createElement('label');
+            aiEnabledLabel.className = 'lisesca-checkbox-label';
+
+            // Disable if AI is not configured
+            var aiConfigured = CONFIG.isAIConfigured();
+            if (!aiConfigured) {
+                aiEnabledLabel.classList.add('lisesca-disabled');
+            }
+
+            aiEnabledCheck = document.createElement('input');
+            aiEnabledCheck.type = 'checkbox';
+            aiEnabledCheck.id = 'lisesca-ai-enabled';
+            aiEnabledCheck.checked = aiConfigured && State.getAIEnabled();
+            aiEnabledCheck.disabled = !aiConfigured;
+            aiEnabledCheck.addEventListener('change', function() {
+                State.saveAIEnabled(aiEnabledCheck.checked);
+            });
+            aiEnabledLabel.appendChild(aiEnabledCheck);
+            aiEnabledLabel.appendChild(document.createTextNode('AI job selection'));
+            aiEnabledRow.appendChild(aiEnabledLabel);
         }
 
         // GO button — dispatches to the correct controller
@@ -549,6 +736,9 @@ export const UI = {
         this.menu.appendChild(fmtRow);
         if (includeViewedRow) {
             this.menu.appendChild(includeViewedRow);
+        }
+        if (aiEnabledRow) {
+            this.menu.appendChild(aiEnabledRow);
         }
         this.menu.appendChild(goBtn);
 
@@ -685,6 +875,9 @@ export const UI = {
     // --- Configuration panel ---
     configOverlay: null,
 
+    // --- AI Configuration panel ---
+    aiConfigOverlay: null,
+
     /**
      * Create the configuration panel overlay.
      */
@@ -810,6 +1003,24 @@ export const UI = {
         jobPauseMaxRow.appendChild(jobPauseMaxLabel);
         jobPauseMaxRow.appendChild(jobPauseMaxInput);
 
+        // --- AI Filtering section ---
+        var aiSectionLabel = document.createElement('div');
+        aiSectionLabel.className = 'lisesca-config-section';
+        aiSectionLabel.textContent = 'AI Job Filtering';
+
+        var aiConfigBtnRow = document.createElement('div');
+        aiConfigBtnRow.className = 'lisesca-config-row';
+
+        var aiConfigBtn = document.createElement('button');
+        aiConfigBtn.className = 'lisesca-ai-config-btn';
+        aiConfigBtn.textContent = 'AI Filtering...';
+        aiConfigBtn.addEventListener('click', function() {
+            UI.hideConfig();
+            UI.showAIConfig();
+        });
+
+        aiConfigBtnRow.appendChild(aiConfigBtn);
+
         var errorDiv = document.createElement('div');
         errorDiv.className = 'lisesca-config-error';
         errorDiv.id = 'lisesca-config-error';
@@ -849,6 +1060,8 @@ export const UI = {
         panel.appendChild(jobReviewMaxRow);
         panel.appendChild(jobPauseMinRow);
         panel.appendChild(jobPauseMaxRow);
+        panel.appendChild(aiSectionLabel);
+        panel.appendChild(aiConfigBtnRow);
         panel.appendChild(errorDiv);
         panel.appendChild(buttonsRow);
 
@@ -964,6 +1177,184 @@ export const UI = {
         this.hideConfig();
     },
 
+    // --- AI Configuration panel methods ---
+
+    /**
+     * Create the AI configuration panel overlay.
+     */
+    createAIConfigPanel: function() {
+        this.aiConfigOverlay = document.createElement('div');
+        this.aiConfigOverlay.className = 'lisesca-ai-config-overlay';
+
+        var panel = document.createElement('div');
+        panel.className = 'lisesca-ai-config-panel';
+
+        var title = document.createElement('div');
+        title.className = 'lisesca-ai-config-title';
+        title.textContent = 'AI Job Filtering Configuration';
+
+        // API Key row
+        var apiKeyRow = document.createElement('div');
+        apiKeyRow.className = 'lisesca-ai-config-row';
+
+        var apiKeyLabel = document.createElement('label');
+        apiKeyLabel.textContent = 'Anthropic API Key:';
+        apiKeyLabel.htmlFor = 'lisesca-ai-api-key';
+
+        var apiKeyInput = document.createElement('input');
+        apiKeyInput.type = 'password';
+        apiKeyInput.id = 'lisesca-ai-api-key';
+        apiKeyInput.placeholder = 'sk-ant-...';
+        apiKeyInput.value = CONFIG.ANTHROPIC_API_KEY || '';
+
+        var apiKeyHint = document.createElement('div');
+        apiKeyHint.className = 'lisesca-hint';
+        apiKeyHint.textContent = 'Get your API key from console.anthropic.com';
+
+        apiKeyRow.appendChild(apiKeyLabel);
+        apiKeyRow.appendChild(apiKeyInput);
+        apiKeyRow.appendChild(apiKeyHint);
+
+        // Job Criteria row
+        var criteriaRow = document.createElement('div');
+        criteriaRow.className = 'lisesca-ai-config-row';
+
+        var criteriaLabel = document.createElement('label');
+        criteriaLabel.textContent = 'Job Search Criteria:';
+        criteriaLabel.htmlFor = 'lisesca-ai-criteria';
+
+        var criteriaTextarea = document.createElement('textarea');
+        criteriaTextarea.id = 'lisesca-ai-criteria';
+        criteriaTextarea.rows = 12;
+        criteriaTextarea.placeholder = 'Describe the job you are looking for...\n\nExample:\nI am looking for Senior Software Engineering Manager roles.\nI have 15 years of experience in software development.\nI prefer remote or hybrid positions.\nI am NOT interested in:\n- Manufacturing or industrial positions\n- Roles requiring specific domain expertise I don\'t have';
+        criteriaTextarea.value = CONFIG.JOB_CRITERIA || '';
+
+        var criteriaHint = document.createElement('div');
+        criteriaHint.className = 'lisesca-hint';
+        criteriaHint.textContent = 'Describe your ideal job. Be specific about what you want and don\'t want.';
+
+        criteriaRow.appendChild(criteriaLabel);
+        criteriaRow.appendChild(criteriaTextarea);
+        criteriaRow.appendChild(criteriaHint);
+
+        // Error display
+        var errorDiv = document.createElement('div');
+        errorDiv.className = 'lisesca-ai-config-error';
+        errorDiv.id = 'lisesca-ai-config-error';
+
+        // Buttons
+        var buttonsRow = document.createElement('div');
+        buttonsRow.className = 'lisesca-ai-config-buttons';
+
+        var saveBtn = document.createElement('button');
+        saveBtn.className = 'lisesca-ai-config-save';
+        saveBtn.textContent = 'Save';
+        saveBtn.addEventListener('click', function() {
+            UI.saveAIConfig();
+        });
+
+        var cancelBtn = document.createElement('button');
+        cancelBtn.className = 'lisesca-ai-config-cancel';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.addEventListener('click', function() {
+            UI.hideAIConfig();
+        });
+
+        buttonsRow.appendChild(saveBtn);
+        buttonsRow.appendChild(cancelBtn);
+
+        // Assemble panel
+        panel.appendChild(title);
+        panel.appendChild(apiKeyRow);
+        panel.appendChild(criteriaRow);
+        panel.appendChild(errorDiv);
+        panel.appendChild(buttonsRow);
+
+        this.aiConfigOverlay.appendChild(panel);
+
+        // Close on overlay click
+        this.aiConfigOverlay.addEventListener('click', function(event) {
+            if (event.target === UI.aiConfigOverlay) {
+                UI.hideAIConfig();
+            }
+        });
+
+        document.body.appendChild(this.aiConfigOverlay);
+    },
+
+    /**
+     * Show the AI configuration panel.
+     */
+    showAIConfig: function() {
+        document.getElementById('lisesca-ai-api-key').value = CONFIG.ANTHROPIC_API_KEY || '';
+        document.getElementById('lisesca-ai-criteria').value = CONFIG.JOB_CRITERIA || '';
+        document.getElementById('lisesca-ai-config-error').textContent = '';
+        this.aiConfigOverlay.classList.add('lisesca-visible');
+    },
+
+    /**
+     * Hide the AI configuration panel.
+     */
+    hideAIConfig: function() {
+        this.aiConfigOverlay.classList.remove('lisesca-visible');
+    },
+
+    /**
+     * Validate and save AI configuration.
+     */
+    saveAIConfig: function() {
+        var errorDiv = document.getElementById('lisesca-ai-config-error');
+        var apiKey = document.getElementById('lisesca-ai-api-key').value.trim();
+        var criteria = document.getElementById('lisesca-ai-criteria').value.trim();
+
+        // Both must be filled or both empty (to disable AI filtering)
+        if ((apiKey && !criteria) || (!apiKey && criteria)) {
+            errorDiv.textContent = 'Please fill in both fields, or leave both empty to disable AI filtering.';
+            return;
+        }
+
+        // Basic API key format validation
+        if (apiKey && !apiKey.startsWith('sk-ant-')) {
+            errorDiv.textContent = 'API key should start with "sk-ant-"';
+            return;
+        }
+
+        // Save to CONFIG
+        CONFIG.ANTHROPIC_API_KEY = apiKey;
+        CONFIG.JOB_CRITERIA = criteria;
+        CONFIG.saveAIConfig();
+
+        // Update the AI toggle state in the menu if it exists
+        this.updateAIToggleState();
+
+        console.log('[LiSeSca] AI config saved. Configured: ' + CONFIG.isAIConfigured());
+        this.hideAIConfig();
+    },
+
+    /**
+     * Update the AI toggle checkbox state based on configuration.
+     * Disables the checkbox if AI is not configured.
+     */
+    updateAIToggleState: function() {
+        var aiCheck = document.getElementById('lisesca-ai-enabled');
+        var aiLabel = aiCheck ? aiCheck.closest('.lisesca-checkbox-label') : null;
+
+        if (!aiCheck || !aiLabel) {
+            return;
+        }
+
+        var isConfigured = CONFIG.isAIConfigured();
+        aiCheck.disabled = !isConfigured;
+
+        if (isConfigured) {
+            aiLabel.classList.remove('lisesca-disabled');
+        } else {
+            aiLabel.classList.add('lisesca-disabled');
+            aiCheck.checked = false;
+            State.saveAIEnabled(false);
+        }
+    },
+
     // --- SPA Navigation Support ---
 
     /**
@@ -1000,14 +1391,27 @@ export const UI = {
     },
 
     /**
+     * Remove the AI configuration overlay from the DOM.
+     */
+    removeAIConfigPanel: function() {
+        if (this.aiConfigOverlay && this.aiConfigOverlay.parentNode) {
+            this.aiConfigOverlay.parentNode.removeChild(this.aiConfigOverlay);
+            console.log('[LiSeSca] AI config panel removed.');
+        }
+        this.aiConfigOverlay = null;
+    },
+
+    /**
      * Remove existing panels and create fresh ones for the current page type.
      * Used when SPA navigation changes the page type.
      */
     rebuildPanel: function() {
         this.removePanel();
         this.removeConfigPanel();
+        this.removeAIConfigPanel();
         this.createPanel();
         this.createConfigPanel();
+        this.createAIConfigPanel();
         console.log('[LiSeSca] UI panels rebuilt for new page.');
     }
 };
