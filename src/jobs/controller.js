@@ -203,6 +203,12 @@ export const JobController = {
         }
         UI.showStatus(statusMsg);
 
+        // Show AI stats if AI filtering is active
+        var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
+        if (aiEnabled) {
+            UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+        }
+
         var includeViewed = State.getIncludeViewed();
         var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
         var viewedCheck = includeViewed ? Promise.resolve(false) : JobExtractor.isJobViewed(jobId);
@@ -245,6 +251,10 @@ export const JobController = {
                                 return null;
                             }
 
+                            // Count this job as evaluated
+                            State.incrementAIJobsEvaluated();
+                            UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+
                             if (decision === 'reject') {
                                 // Reject: skip job entirely, no full details fetched
                                 console.log('[LiSeSca] AI rejected job: ' + cardData.jobTitle);
@@ -260,6 +270,8 @@ export const JobController = {
                             if (decision === 'keep') {
                                 // Keep: accept job, fetch full details for output
                                 console.log('[LiSeSca] AI kept job: ' + cardData.jobTitle);
+                                State.incrementAIJobsAccepted();
+                                UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                 UI.showStatus(statusMsg + ' — AI: Keep');
                                 return JobExtractor.extractFullJob(jobId);
                             }
@@ -289,6 +301,8 @@ export const JobController = {
 
                                     if (accept) {
                                         console.log('[LiSeSca] AI accepted job after full review: ' + job.jobTitle);
+                                        State.incrementAIJobsAccepted();
+                                        UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                         UI.showStatus(statusMsg + ' — AI: Accept');
                                         return job;
                                     }
@@ -314,6 +328,10 @@ export const JobController = {
                                 return null;
                             }
 
+                            // Count this job as evaluated
+                            State.incrementAIJobsEvaluated();
+                            UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+
                             if (!shouldDownload) {
                                 console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
                                 UI.showStatus(statusMsg + ' — AI: Skip');
@@ -326,6 +344,8 @@ export const JobController = {
                             }
 
                             console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
+                            State.incrementAIJobsAccepted();
+                            UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                             return JobExtractor.extractFullJob(jobId);
                         });
                     }
@@ -449,22 +469,39 @@ export const JobController = {
         var state = State.getScrapingState();
         var pagesScraped = state.currentPage - state.startPage + 1;
 
+        // Get AI stats before clearing state
+        var aiEnabled = State.getAIEnabled();
+        var aiEvaluated = State.getAIJobsEvaluated();
+        var aiAccepted = State.getAIJobsAccepted();
+
         console.log('[LiSeSca] Job scraping finished! Total: ' + totalJobs + ' jobs across '
             + pagesScraped + ' page(s).');
+        if (aiEnabled && aiEvaluated > 0) {
+            console.log('[LiSeSca] AI stats: ' + aiAccepted + '/' + aiEvaluated + ' accepted.');
+        }
 
         UI.showProgress('');
+        UI.hideAIStats();
+
         if (totalJobs > 0) {
             UI.showStatus('Done! ' + totalJobs + ' jobs scraped across '
                 + pagesScraped + ' page(s). Downloading...');
             JobOutput.downloadResults(buffer);
+            State.clear();
+            setTimeout(function() {
+                UI.showIdleState();
+            }, 5000);
+        } else if (aiEnabled && aiEvaluated > 0) {
+            // AI filtering was active but no jobs matched - show special notification
+            State.clear();
+            UI.showNoResults(aiEvaluated, pagesScraped);
         } else {
             UI.showStatus('No jobs found.');
+            State.clear();
+            setTimeout(function() {
+                UI.showIdleState();
+            }, 5000);
         }
-
-        State.clear();
-        setTimeout(function() {
-            UI.showIdleState();
-        }, 5000);
     },
 
     /**

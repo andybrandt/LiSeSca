@@ -19,7 +19,10 @@ export const State = {
         SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
         JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
         JOB_IDS_ON_PAGE: 'lisesca_jobIdsOnPage',  // JSON array of job IDs for current page
-        JOB_TOTAL: 'lisesca_jobTotal'             // total jobs count for "All" mode
+        JOB_TOTAL: 'lisesca_jobTotal',            // total jobs count for "All" mode
+        // AI evaluation statistics
+        AI_JOBS_EVALUATED: 'lisesca_aiJobsEvaluated',  // count of jobs evaluated by AI
+        AI_JOBS_ACCEPTED: 'lisesca_aiJobsAccepted'     // count of jobs accepted by AI
     },
 
     /**
@@ -96,6 +99,9 @@ export const State = {
         this.set(this.KEYS.JOB_INDEX, 0);
         this.set(this.KEYS.JOB_IDS_ON_PAGE, JSON.stringify([]));
         this.set(this.KEYS.JOB_TOTAL, 0);
+        // Reset AI evaluation counters
+        this.set(this.KEYS.AI_JOBS_EVALUATED, 0);
+        this.set(this.KEYS.AI_JOBS_ACCEPTED, 0);
         console.log('[LiSeSca] Session started: mode=' + (scrapeMode || 'people')
             + ', pages=' + targetPageCount + ', startPage=' + startPage);
     },
@@ -246,6 +252,38 @@ export const State = {
     },
 
     /**
+     * Get the count of jobs evaluated by AI in this session.
+     * @returns {number}
+     */
+    getAIJobsEvaluated: function() {
+        return this.get(this.KEYS.AI_JOBS_EVALUATED, 0);
+    },
+
+    /**
+     * Get the count of jobs accepted by AI in this session.
+     * @returns {number}
+     */
+    getAIJobsAccepted: function() {
+        return this.get(this.KEYS.AI_JOBS_ACCEPTED, 0);
+    },
+
+    /**
+     * Increment the AI jobs evaluated counter.
+     */
+    incrementAIJobsEvaluated: function() {
+        var current = this.get(this.KEYS.AI_JOBS_EVALUATED, 0);
+        this.set(this.KEYS.AI_JOBS_EVALUATED, current + 1);
+    },
+
+    /**
+     * Increment the AI jobs accepted counter.
+     */
+    incrementAIJobsAccepted: function() {
+        var current = this.get(this.KEYS.AI_JOBS_ACCEPTED, 0);
+        this.set(this.KEYS.AI_JOBS_ACCEPTED, current + 1);
+    },
+
+    /**
      * Get the current scraped data buffer.
      * @returns {Array} Array of data objects (profiles or jobs).
      */
@@ -296,6 +334,8 @@ export const State = {
         GM_deleteValue(this.KEYS.JOB_INDEX);
         GM_deleteValue(this.KEYS.JOB_IDS_ON_PAGE);
         GM_deleteValue(this.KEYS.JOB_TOTAL);
+        GM_deleteValue(this.KEYS.AI_JOBS_EVALUATED);
+        GM_deleteValue(this.KEYS.AI_JOBS_ACCEPTED);
         console.log('[LiSeSca] Session state cleared.');
     }
 };

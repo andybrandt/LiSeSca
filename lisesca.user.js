@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.13
+// @version      0.3.14
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -27,7 +27,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.3.13',
+        VERSION: '0.3.14',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -157,7 +157,10 @@
             SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
             JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
             JOB_IDS_ON_PAGE: 'lisesca_jobIdsOnPage',  // JSON array of job IDs for current page
-            JOB_TOTAL: 'lisesca_jobTotal'             // total jobs count for "All" mode
+            JOB_TOTAL: 'lisesca_jobTotal',            // total jobs count for "All" mode
+            // AI evaluation statistics
+            AI_JOBS_EVALUATED: 'lisesca_aiJobsEvaluated',  // count of jobs evaluated by AI
+            AI_JOBS_ACCEPTED: 'lisesca_aiJobsAccepted'     // count of jobs accepted by AI
         },
 
         /**
@@ -234,6 +237,9 @@
             this.set(this.KEYS.JOB_INDEX, 0);
             this.set(this.KEYS.JOB_IDS_ON_PAGE, JSON.stringify([]));
             this.set(this.KEYS.JOB_TOTAL, 0);
+            // Reset AI evaluation counters
+            this.set(this.KEYS.AI_JOBS_EVALUATED, 0);
+            this.set(this.KEYS.AI_JOBS_ACCEPTED, 0);
             console.log('[LiSeSca] Session started: mode=' + (scrapeMode || 'people')
                 + ', pages=' + targetPageCount + ', startPage=' + startPage);
         },
@@ -384,6 +390,38 @@
         },
 
         /**
+         * Get the count of jobs evaluated by AI in this session.
+         * @returns {number}
+         */
+        getAIJobsEvaluated: function() {
+            return this.get(this.KEYS.AI_JOBS_EVALUATED, 0);
+        },
+
+        /**
+         * Get the count of jobs accepted by AI in this session.
+         * @returns {number}
+         */
+        getAIJobsAccepted: function() {
+            return this.get(this.KEYS.AI_JOBS_ACCEPTED, 0);
+        },
+
+        /**
+         * Increment the AI jobs evaluated counter.
+         */
+        incrementAIJobsEvaluated: function() {
+            var current = this.get(this.KEYS.AI_JOBS_EVALUATED, 0);
+            this.set(this.KEYS.AI_JOBS_EVALUATED, current + 1);
+        },
+
+        /**
+         * Increment the AI jobs accepted counter.
+         */
+        incrementAIJobsAccepted: function() {
+            var current = this.get(this.KEYS.AI_JOBS_ACCEPTED, 0);
+            this.set(this.KEYS.AI_JOBS_ACCEPTED, current + 1);
+        },
+
+        /**
          * Get the current scraped data buffer.
          * @returns {Array} Array of data objects (profiles or jobs).
          */
@@ -434,6 +472,8 @@
             GM_deleteValue(this.KEYS.JOB_INDEX);
             GM_deleteValue(this.KEYS.JOB_IDS_ON_PAGE);
             GM_deleteValue(this.KEYS.JOB_TOTAL);
+            GM_deleteValue(this.KEYS.AI_JOBS_EVALUATED);
+            GM_deleteValue(this.KEYS.AI_JOBS_ACCEPTED);
             console.log('[LiSeSca] Session state cleared.');
         }
     };
@@ -726,6 +766,7 @@
         panel: null,
         menu: null,
         statusArea: null,
+        noResultsArea: null,
         isMenuOpen: false,
 
         /** Flag to prevent duplicate style injection (styles persist across SPA navigation) */
@@ -941,6 +982,59 @@
             }
             .lisesca-stop-btn:hover {
                 background: #f85149;
+            }
+
+            /* AI stats display in progress area */
+            .lisesca-ai-stats {
+                display: none;
+                font-size: 11px;
+                color: #58a6ff;
+                margin-bottom: 4px;
+            }
+            .lisesca-ai-stats.lisesca-visible {
+                display: block;
+            }
+
+            /* No-results notification */
+            .lisesca-no-results {
+                display: none;
+                padding: 12px 10px;
+                border-top: 1px solid #30363d;
+                text-align: center;
+            }
+            .lisesca-no-results.lisesca-visible {
+                display: block;
+            }
+            .lisesca-no-results-icon {
+                font-size: 24px;
+                margin-bottom: 8px;
+                color: #8b949e;
+            }
+            .lisesca-no-results-title {
+                font-size: 13px;
+                font-weight: 600;
+                color: #e1e4e8;
+                margin-bottom: 6px;
+            }
+            .lisesca-no-results-stats {
+                font-size: 11px;
+                color: #8b949e;
+                margin-bottom: 10px;
+            }
+            .lisesca-no-results-btn {
+                width: 100%;
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-no-results-btn:hover {
+                background: #30363d;
             }
 
             /* ---- Configuration overlay ---- */
@@ -1500,6 +1594,12 @@
             progressText.className = 'lisesca-status-progress';
             progressText.textContent = '';
 
+            // AI stats display (shown when AI filtering is active)
+            var aiStatsText = document.createElement('div');
+            aiStatsText.id = 'lisesca-ai-stats';
+            aiStatsText.className = 'lisesca-ai-stats';
+            aiStatsText.textContent = '';
+
             var statusText = document.createElement('div');
             statusText.id = 'lisesca-status-text';
             statusText.textContent = 'Initializing...';
@@ -1518,13 +1618,46 @@
             });
 
             this.statusArea.appendChild(progressText);
+            this.statusArea.appendChild(aiStatsText);
             this.statusArea.appendChild(statusText);
             this.statusArea.appendChild(stopBtn);
+
+            // --- No-results notification area ---
+            this.noResultsArea = document.createElement('div');
+            this.noResultsArea.className = 'lisesca-no-results';
+            this.noResultsArea.id = 'lisesca-no-results';
+
+            var noResultsIcon = document.createElement('div');
+            noResultsIcon.className = 'lisesca-no-results-icon';
+            noResultsIcon.textContent = '\u2205'; // Empty set symbol
+
+            var noResultsTitle = document.createElement('div');
+            noResultsTitle.className = 'lisesca-no-results-title';
+            noResultsTitle.id = 'lisesca-no-results-title';
+            noResultsTitle.textContent = 'No matching jobs found';
+
+            var noResultsStats = document.createElement('div');
+            noResultsStats.className = 'lisesca-no-results-stats';
+            noResultsStats.id = 'lisesca-no-results-stats';
+            noResultsStats.textContent = '';
+
+            var noResultsBtn = document.createElement('button');
+            noResultsBtn.className = 'lisesca-no-results-btn';
+            noResultsBtn.textContent = 'OK';
+            noResultsBtn.addEventListener('click', function() {
+                UI.hideNoResults();
+            });
+
+            this.noResultsArea.appendChild(noResultsIcon);
+            this.noResultsArea.appendChild(noResultsTitle);
+            this.noResultsArea.appendChild(noResultsStats);
+            this.noResultsArea.appendChild(noResultsBtn);
 
             // --- Assemble panel ---
             this.panel.appendChild(topbar);
             this.panel.appendChild(this.menu);
             this.panel.appendChild(this.statusArea);
+            this.panel.appendChild(this.noResultsArea);
 
             document.body.appendChild(this.panel);
             console.log('[LiSeSca] UI panel injected (' + pageType + ' mode).');
@@ -1617,8 +1750,78 @@
         showIdleState: function() {
             this.hideStatus();
             this.showProgress('');
+            this.hideAIStats();
+            this.hideNoResults();
             this.menu.classList.remove('lisesca-open');
             this.isMenuOpen = false;
+        },
+
+        /**
+         * Show AI evaluation statistics in the status area.
+         * @param {number} evaluated - Number of jobs evaluated by AI.
+         * @param {number} accepted - Number of jobs accepted by AI.
+         */
+        showAIStats: function(evaluated, accepted) {
+            var statsEl = document.getElementById('lisesca-ai-stats');
+            if (!statsEl) {
+                return;
+            }
+            if (evaluated > 0) {
+                statsEl.textContent = 'AI: ' + accepted + '/' + evaluated + ' accepted';
+                statsEl.classList.add('lisesca-visible');
+            } else {
+                statsEl.textContent = '';
+                statsEl.classList.remove('lisesca-visible');
+            }
+        },
+
+        /**
+         * Hide the AI stats display.
+         */
+        hideAIStats: function() {
+            var statsEl = document.getElementById('lisesca-ai-stats');
+            if (statsEl) {
+                statsEl.textContent = '';
+                statsEl.classList.remove('lisesca-visible');
+            }
+        },
+
+        /**
+         * Show the no-results notification with statistics.
+         * @param {number} evaluated - Number of jobs evaluated by AI.
+         * @param {number} pagesScraped - Number of pages scanned.
+         */
+        showNoResults: function(evaluated, pagesScraped) {
+            // Hide status area first
+            this.hideStatus();
+            this.hideAIStats();
+
+            // Update the stats text
+            var statsEl = document.getElementById('lisesca-no-results-stats');
+            if (statsEl) {
+                var statsText = evaluated + ' job' + (evaluated !== 1 ? 's' : '') + ' scanned';
+                if (pagesScraped > 1) {
+                    statsText += ' across ' + pagesScraped + ' pages';
+                }
+                statsText += ', none matched your criteria';
+                statsEl.textContent = statsText;
+            }
+
+            // Show the no-results area
+            var noResultsEl = document.getElementById('lisesca-no-results');
+            if (noResultsEl) {
+                noResultsEl.classList.add('lisesca-visible');
+            }
+        },
+
+        /**
+         * Hide the no-results notification.
+         */
+        hideNoResults: function() {
+            var noResultsEl = document.getElementById('lisesca-no-results');
+            if (noResultsEl) {
+                noResultsEl.classList.remove('lisesca-visible');
+            }
         },
 
         // --- Configuration panel ---
@@ -2141,6 +2344,7 @@
             this.panel = null;
             this.menu = null;
             this.statusArea = null;
+            this.noResultsArea = null;
             this.isMenuOpen = false;
         },
 
@@ -4700,6 +4904,12 @@ You will receive the user's criteria first, then job cards one at a time.`;
             }
             UI.showStatus(statusMsg);
 
+            // Show AI stats if AI filtering is active
+            var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
+            if (aiEnabled) {
+                UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+            }
+
             var includeViewed = State.getIncludeViewed();
             var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
             var viewedCheck = includeViewed ? Promise.resolve(false) : JobExtractor.isJobViewed(jobId);
@@ -4742,6 +4952,10 @@ You will receive the user's criteria first, then job cards one at a time.`;
                                     return null;
                                 }
 
+                                // Count this job as evaluated
+                                State.incrementAIJobsEvaluated();
+                                UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+
                                 if (decision === 'reject') {
                                     // Reject: skip job entirely, no full details fetched
                                     console.log('[LiSeSca] AI rejected job: ' + cardData.jobTitle);
@@ -4757,6 +4971,8 @@ You will receive the user's criteria first, then job cards one at a time.`;
                                 if (decision === 'keep') {
                                     // Keep: accept job, fetch full details for output
                                     console.log('[LiSeSca] AI kept job: ' + cardData.jobTitle);
+                                    State.incrementAIJobsAccepted();
+                                    UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                     UI.showStatus(statusMsg + ' — AI: Keep');
                                     return JobExtractor.extractFullJob(jobId);
                                 }
@@ -4786,6 +5002,8 @@ You will receive the user's criteria first, then job cards one at a time.`;
 
                                         if (accept) {
                                             console.log('[LiSeSca] AI accepted job after full review: ' + job.jobTitle);
+                                            State.incrementAIJobsAccepted();
+                                            UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                             UI.showStatus(statusMsg + ' — AI: Accept');
                                             return job;
                                         }
@@ -4811,6 +5029,10 @@ You will receive the user's criteria first, then job cards one at a time.`;
                                     return null;
                                 }
 
+                                // Count this job as evaluated
+                                State.incrementAIJobsEvaluated();
+                                UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+
                                 if (!shouldDownload) {
                                     console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
                                     UI.showStatus(statusMsg + ' — AI: Skip');
@@ -4823,6 +5045,8 @@ You will receive the user's criteria first, then job cards one at a time.`;
                                 }
 
                                 console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
+                                State.incrementAIJobsAccepted();
+                                UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                 return JobExtractor.extractFullJob(jobId);
                             });
                         }
@@ -4946,22 +5170,39 @@ You will receive the user's criteria first, then job cards one at a time.`;
             var state = State.getScrapingState();
             var pagesScraped = state.currentPage - state.startPage + 1;
 
+            // Get AI stats before clearing state
+            var aiEnabled = State.getAIEnabled();
+            var aiEvaluated = State.getAIJobsEvaluated();
+            var aiAccepted = State.getAIJobsAccepted();
+
             console.log('[LiSeSca] Job scraping finished! Total: ' + totalJobs + ' jobs across '
                 + pagesScraped + ' page(s).');
+            if (aiEnabled && aiEvaluated > 0) {
+                console.log('[LiSeSca] AI stats: ' + aiAccepted + '/' + aiEvaluated + ' accepted.');
+            }
 
             UI.showProgress('');
+            UI.hideAIStats();
+
             if (totalJobs > 0) {
                 UI.showStatus('Done! ' + totalJobs + ' jobs scraped across '
                     + pagesScraped + ' page(s). Downloading...');
                 JobOutput.downloadResults(buffer);
+                State.clear();
+                setTimeout(function() {
+                    UI.showIdleState();
+                }, 5000);
+            } else if (aiEnabled && aiEvaluated > 0) {
+                // AI filtering was active but no jobs matched - show special notification
+                State.clear();
+                UI.showNoResults(aiEvaluated, pagesScraped);
             } else {
                 UI.showStatus('No jobs found.');
+                State.clear();
+                setTimeout(function() {
+                    UI.showIdleState();
+                }, 5000);
             }
-
-            State.clear();
-            setTimeout(function() {
-                UI.showIdleState();
-            }, 5000);
         },
 
         /**
