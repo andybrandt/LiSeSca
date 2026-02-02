@@ -670,6 +670,8 @@ export const UI = {
         var includeViewedCheck = null;
         var aiEnabledRow = null;
         var aiEnabledCheck = null;
+        var fullAIRow = null;
+        var fullAICheck = null;
         if (isJobs) {
             includeViewedRow = document.createElement('div');
             includeViewedRow.className = 'lisesca-toggle-row';
@@ -705,12 +707,53 @@ export const UI = {
             aiEnabledCheck.id = 'lisesca-ai-enabled';
             aiEnabledCheck.checked = aiConfigured && State.getAIEnabled();
             aiEnabledCheck.disabled = !aiConfigured;
-            aiEnabledCheck.addEventListener('change', function() {
-                State.saveAIEnabled(aiEnabledCheck.checked);
-            });
+
             aiEnabledLabel.appendChild(aiEnabledCheck);
             aiEnabledLabel.appendChild(document.createTextNode('AI job selection'));
             aiEnabledRow.appendChild(aiEnabledLabel);
+
+            // Full AI evaluation toggle (indented, only visible when AI enabled)
+            fullAIRow = document.createElement('div');
+            fullAIRow.className = 'lisesca-toggle-row';
+            fullAIRow.id = 'lisesca-full-ai-row';
+            fullAIRow.style.marginLeft = '16px';  // Visual hierarchy (indented)
+            fullAIRow.style.display = (aiConfigured && aiEnabledCheck.checked) ? 'flex' : 'none';
+
+            var fullAILabel = document.createElement('label');
+            fullAILabel.className = 'lisesca-checkbox-label';
+
+            fullAICheck = document.createElement('input');
+            fullAICheck.type = 'checkbox';
+            fullAICheck.id = 'lisesca-full-ai-enabled';
+            fullAICheck.checked = aiConfigured && State.getFullAIEnabled();
+            fullAICheck.disabled = !aiConfigured;
+
+            // Auto-uncheck "Include viewed" when Full AI is enabled
+            fullAICheck.addEventListener('change', function() {
+                State.saveFullAIEnabled(fullAICheck.checked);
+                if (fullAICheck.checked && includeViewedCheck) {
+                    includeViewedCheck.checked = false;
+                    State.saveIncludeViewed(false);
+                }
+            });
+
+            fullAILabel.appendChild(fullAICheck);
+            fullAILabel.appendChild(document.createTextNode('Full AI evaluation'));
+            fullAIRow.appendChild(fullAILabel);
+
+            // AI enabled toggle controls Full AI row visibility
+            aiEnabledCheck.addEventListener('change', function() {
+                State.saveAIEnabled(aiEnabledCheck.checked);
+                // Show/hide Full AI row based on AI enabled state
+                if (aiEnabledCheck.checked) {
+                    fullAIRow.style.display = 'flex';
+                } else {
+                    fullAIRow.style.display = 'none';
+                    // Also disable Full AI when AI is disabled
+                    fullAICheck.checked = false;
+                    State.saveFullAIEnabled(false);
+                }
+            });
         }
 
         // GO button — dispatches to the correct controller
@@ -739,6 +782,9 @@ export const UI = {
         }
         if (aiEnabledRow) {
             this.menu.appendChild(aiEnabledRow);
+        }
+        if (fullAIRow) {
+            this.menu.appendChild(fullAIRow);
         }
         this.menu.appendChild(goBtn);
 
@@ -1334,10 +1380,13 @@ export const UI = {
     /**
      * Update the AI toggle checkbox state based on configuration.
      * Disables the checkbox if AI is not configured.
+     * Also updates the Full AI toggle visibility and state.
      */
     updateAIToggleState: function() {
         var aiCheck = document.getElementById('lisesca-ai-enabled');
         var aiLabel = aiCheck ? aiCheck.closest('.lisesca-checkbox-label') : null;
+        var fullAIRow = document.getElementById('lisesca-full-ai-row');
+        var fullAICheck = document.getElementById('lisesca-full-ai-enabled');
 
         if (!aiCheck || !aiLabel) {
             return;
@@ -1352,6 +1401,19 @@ export const UI = {
             aiLabel.classList.add('lisesca-disabled');
             aiCheck.checked = false;
             State.saveAIEnabled(false);
+        }
+
+        // Update Full AI toggle state
+        if (fullAIRow && fullAICheck) {
+            if (isConfigured && aiCheck.checked) {
+                fullAIRow.style.display = 'flex';
+                fullAICheck.disabled = false;
+            } else {
+                fullAIRow.style.display = 'none';
+                fullAICheck.checked = false;
+                fullAICheck.disabled = true;
+                State.saveFullAIEnabled(false);
+            }
         }
     },
 

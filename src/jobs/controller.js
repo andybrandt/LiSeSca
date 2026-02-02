@@ -53,6 +53,10 @@ export const JobController = {
         var aiEnabled = State.readAIEnabledFromUI();
         State.saveAIEnabled(aiEnabled);
 
+        // Save Full AI enabled state from UI
+        var fullAIEnabled = State.readFullAIEnabledFromUI();
+        State.saveFullAIEnabled(fullAIEnabled);
+
         State.startSession(target, startPage, baseUrl, 'jobs');
         State.saveFormats(selectedFormats);
 
@@ -220,6 +224,8 @@ export const JobController = {
 
             // AI filtering: evaluate job card before downloading full details
             if (aiEnabled) {
+                var fullAIMode = State.getFullAIEnabled();
+
                 return JobExtractor.getRenderedCard(jobId).then(function(result) {
                     if (!result.card) {
                         // Can't get card data, proceed anyway
@@ -230,27 +236,99 @@ export const JobController = {
                     var cardData = JobExtractor.extractCardBasics(result.card);
                     var cardMarkdown = JobExtractor.formatCardForAI(cardData);
 
-                    UI.showStatus(statusMsg + ' — AI evaluating...');
+                    if (fullAIMode) {
+                        // THREE-TIER EVALUATION (reject/keep/maybe)
+                        UI.showStatus(statusMsg + ' — AI triage...');
 
-                    return AIClient.evaluateJob(cardMarkdown).then(function(shouldDownload) {
-                        if (!State.isScraping()) {
-                            return null;
-                        }
+                        return AIClient.triageCard(cardMarkdown).then(function(decision) {
+                            if (!State.isScraping()) {
+                                return null;
+                            }
 
-                        if (!shouldDownload) {
-                            console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
-                            UI.showStatus(statusMsg + ' — AI: Skip');
-                            State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
-                            return Emulator.randomDelay(300, 600).then(function() {
-                                self.scrapeNextJob();
-                            }).then(function() {
-                                return 'skip';
+                            if (decision === 'reject') {
+                                // Reject: skip job entirely, no full details fetched
+                                console.log('[LiSeSca] AI rejected job: ' + cardData.jobTitle);
+                                UI.showStatus(statusMsg + ' — AI: Reject');
+                                State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                return Emulator.randomDelay(300, 600).then(function() {
+                                    self.scrapeNextJob();
+                                }).then(function() {
+                                    return 'skip';
+                                });
+                            }
+
+                            if (decision === 'keep') {
+                                // Keep: accept job, fetch full details for output
+                                console.log('[LiSeSca] AI kept job: ' + cardData.jobTitle);
+                                UI.showStatus(statusMsg + ' — AI: Keep');
+                                return JobExtractor.extractFullJob(jobId);
+                            }
+
+                            // Maybe: fetch full details, then ask AI again
+                            console.log('[LiSeSca] AI maybe on job: ' + cardData.jobTitle);
+                            UI.showStatus(statusMsg + ' — AI: Fetching details...');
+
+                            return JobExtractor.extractFullJob(jobId).then(function(job) {
+                                if (!job) {
+                                    console.warn('[LiSeSca] Could not extract job for full evaluation');
+                                    return null;
+                                }
+
+                                if (!State.isScraping()) {
+                                    return null;
+                                }
+
+                                // Format full job for second AI evaluation
+                                var fullJobMarkdown = JobOutput.formatJobMarkdown(job);
+                                UI.showStatus(statusMsg + ' — AI: Full evaluation...');
+
+                                return AIClient.evaluateFullJob(fullJobMarkdown).then(function(accept) {
+                                    if (!State.isScraping()) {
+                                        return null;
+                                    }
+
+                                    if (accept) {
+                                        console.log('[LiSeSca] AI accepted job after full review: ' + job.jobTitle);
+                                        UI.showStatus(statusMsg + ' — AI: Accept');
+                                        return job;
+                                    }
+
+                                    // Reject after full evaluation: skip
+                                    console.log('[LiSeSca] AI rejected job after full review: ' + job.jobTitle);
+                                    UI.showStatus(statusMsg + ' — AI: Reject (full)');
+                                    State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                    return Emulator.randomDelay(300, 600).then(function() {
+                                        self.scrapeNextJob();
+                                    }).then(function() {
+                                        return 'skip';
+                                    });
+                                });
                             });
-                        }
+                        });
+                    } else {
+                        // BASIC BINARY EVALUATION (download/skip)
+                        UI.showStatus(statusMsg + ' — AI evaluating...');
 
-                        console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
-                        return JobExtractor.extractFullJob(jobId);
-                    });
+                        return AIClient.evaluateJob(cardMarkdown).then(function(shouldDownload) {
+                            if (!State.isScraping()) {
+                                return null;
+                            }
+
+                            if (!shouldDownload) {
+                                console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
+                                UI.showStatus(statusMsg + ' — AI: Skip');
+                                State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                return Emulator.randomDelay(300, 600).then(function() {
+                                    self.scrapeNextJob();
+                                }).then(function() {
+                                    return 'skip';
+                                });
+                            }
+
+                            console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
+                            return JobExtractor.extractFullJob(jobId);
+                        });
+                    }
                 });
             }
 

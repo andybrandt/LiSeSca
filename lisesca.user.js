@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.12
+// @version      0.3.13
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -27,7 +27,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.3.12',
+        VERSION: '0.3.13',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -152,6 +152,7 @@
             FORMATS: 'lisesca_formats',
             INCLUDE_VIEWED: 'lisesca_includeViewed',
             AI_ENABLED: 'lisesca_aiEnabled',          // AI job filtering toggle
+            FULL_AI_ENABLED: 'lisesca_fullAIEnabled', // Full AI evaluation toggle (three-tier)
             // Job-specific state keys
             SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
             JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
@@ -351,6 +352,35 @@
          */
         getAIEnabled: function() {
             return this.get(this.KEYS.AI_ENABLED, false);
+        },
+
+        /**
+         * Read the "Full AI evaluation" preference from the UI checkbox.
+         * @returns {boolean} True if full AI evaluation is enabled.
+         */
+        readFullAIEnabledFromUI: function() {
+            var fullAICheck = document.getElementById('lisesca-full-ai-enabled');
+            if (!fullAICheck) {
+                return false;
+            }
+            return fullAICheck.checked;
+        },
+
+        /**
+         * Save the "Full AI evaluation" preference to persistent storage.
+         * @param {boolean} fullAIEnabled - True to enable full AI evaluation.
+         */
+        saveFullAIEnabled: function(fullAIEnabled) {
+            this.set(this.KEYS.FULL_AI_ENABLED, fullAIEnabled === true);
+        },
+
+        /**
+         * Retrieve the saved "Full AI evaluation" preference.
+         * Defaults to false if not set.
+         * @returns {boolean}
+         */
+        getFullAIEnabled: function() {
+            return this.get(this.KEYS.FULL_AI_ENABLED, false);
         },
 
         /**
@@ -1343,6 +1373,8 @@
             var includeViewedCheck = null;
             var aiEnabledRow = null;
             var aiEnabledCheck = null;
+            var fullAIRow = null;
+            var fullAICheck = null;
             if (isJobs) {
                 includeViewedRow = document.createElement('div');
                 includeViewedRow.className = 'lisesca-toggle-row';
@@ -1378,12 +1410,53 @@
                 aiEnabledCheck.id = 'lisesca-ai-enabled';
                 aiEnabledCheck.checked = aiConfigured && State.getAIEnabled();
                 aiEnabledCheck.disabled = !aiConfigured;
-                aiEnabledCheck.addEventListener('change', function() {
-                    State.saveAIEnabled(aiEnabledCheck.checked);
-                });
+
                 aiEnabledLabel.appendChild(aiEnabledCheck);
                 aiEnabledLabel.appendChild(document.createTextNode('AI job selection'));
                 aiEnabledRow.appendChild(aiEnabledLabel);
+
+                // Full AI evaluation toggle (indented, only visible when AI enabled)
+                fullAIRow = document.createElement('div');
+                fullAIRow.className = 'lisesca-toggle-row';
+                fullAIRow.id = 'lisesca-full-ai-row';
+                fullAIRow.style.marginLeft = '16px';  // Visual hierarchy (indented)
+                fullAIRow.style.display = (aiConfigured && aiEnabledCheck.checked) ? 'flex' : 'none';
+
+                var fullAILabel = document.createElement('label');
+                fullAILabel.className = 'lisesca-checkbox-label';
+
+                fullAICheck = document.createElement('input');
+                fullAICheck.type = 'checkbox';
+                fullAICheck.id = 'lisesca-full-ai-enabled';
+                fullAICheck.checked = aiConfigured && State.getFullAIEnabled();
+                fullAICheck.disabled = !aiConfigured;
+
+                // Auto-uncheck "Include viewed" when Full AI is enabled
+                fullAICheck.addEventListener('change', function() {
+                    State.saveFullAIEnabled(fullAICheck.checked);
+                    if (fullAICheck.checked && includeViewedCheck) {
+                        includeViewedCheck.checked = false;
+                        State.saveIncludeViewed(false);
+                    }
+                });
+
+                fullAILabel.appendChild(fullAICheck);
+                fullAILabel.appendChild(document.createTextNode('Full AI evaluation'));
+                fullAIRow.appendChild(fullAILabel);
+
+                // AI enabled toggle controls Full AI row visibility
+                aiEnabledCheck.addEventListener('change', function() {
+                    State.saveAIEnabled(aiEnabledCheck.checked);
+                    // Show/hide Full AI row based on AI enabled state
+                    if (aiEnabledCheck.checked) {
+                        fullAIRow.style.display = 'flex';
+                    } else {
+                        fullAIRow.style.display = 'none';
+                        // Also disable Full AI when AI is disabled
+                        fullAICheck.checked = false;
+                        State.saveFullAIEnabled(false);
+                    }
+                });
             }
 
             // GO button — dispatches to the correct controller
@@ -1412,6 +1485,9 @@
             }
             if (aiEnabledRow) {
                 this.menu.appendChild(aiEnabledRow);
+            }
+            if (fullAIRow) {
+                this.menu.appendChild(fullAIRow);
             }
             this.menu.appendChild(goBtn);
 
@@ -2007,10 +2083,13 @@
         /**
          * Update the AI toggle checkbox state based on configuration.
          * Disables the checkbox if AI is not configured.
+         * Also updates the Full AI toggle visibility and state.
          */
         updateAIToggleState: function() {
             var aiCheck = document.getElementById('lisesca-ai-enabled');
             var aiLabel = aiCheck ? aiCheck.closest('.lisesca-checkbox-label') : null;
+            var fullAIRow = document.getElementById('lisesca-full-ai-row');
+            var fullAICheck = document.getElementById('lisesca-full-ai-enabled');
 
             if (!aiCheck || !aiLabel) {
                 return;
@@ -2025,6 +2104,19 @@
                 aiLabel.classList.add('lisesca-disabled');
                 aiCheck.checked = false;
                 State.saveAIEnabled(false);
+            }
+
+            // Update Full AI toggle state
+            if (fullAIRow && fullAICheck) {
+                if (isConfigured && aiCheck.checked) {
+                    fullAIRow.style.display = 'flex';
+                    fullAICheck.disabled = false;
+                } else {
+                    fullAIRow.style.display = 'none';
+                    fullAICheck.checked = false;
+                    fullAICheck.disabled = true;
+                    State.saveFullAIEnabled(false);
+                }
             }
         },
 
@@ -2733,7 +2825,7 @@
     // Maintains conversation history per page to reduce token usage.
 
 
-    /** System prompt that instructs Claude how to evaluate jobs */
+    /** System prompt that instructs Claude how to evaluate jobs (basic mode) */
     const SYSTEM_PROMPT = `You are a job relevance filter. Your task is to quickly decide whether a job posting is worth downloading for detailed review, based on the user's job search criteria.
 
 DECISION RULES:
@@ -2743,7 +2835,23 @@ DECISION RULES:
 
 You will receive the user's criteria first, then job cards one at a time. Each card has only basic info: title, company, location. Make quick decisions based on this limited information.`;
 
-    /** Tool definition that forces structured boolean response */
+    /** System prompt for Full AI mode with three-tier evaluation */
+    const FULL_AI_SYSTEM_PROMPT = `You are a job relevance filter with two-stage evaluation.
+
+STAGE 1 - CARD TRIAGE (limited info: title, company, location):
+Use the card_triage tool to make one of three decisions:
+- "reject" - Job is CLEARLY irrelevant (wrong industry, completely wrong role type, obviously unrelated field)
+- "keep" - Job CLEARLY matches criteria (strong title match, relevant company, good fit)
+- "maybe" - Uncertain from card info alone, need to see full job description to decide
+
+Be CONSERVATIVE with "reject" - only use when truly certain the job is irrelevant. When in doubt, use "maybe" to request full details.
+
+STAGE 2 - FULL EVALUATION (complete job description):
+When you receive full job details after a "maybe" decision, use the full_evaluation tool to make a final accept/reject based on comprehensive analysis of requirements, responsibilities, qualifications, and company info.
+
+You will receive the user's criteria first, then job cards one at a time.`;
+
+    /** Tool definition that forces structured boolean response (basic mode) */
     const JOB_EVALUATION_TOOL = {
         name: 'job_evaluation',
         description: 'Indicate whether this job should be downloaded for detailed review',
@@ -2759,12 +2867,48 @@ You will receive the user's criteria first, then job cards one at a time. Each c
         }
     };
 
+    /** Tool for three-tier card triage (Full AI mode) */
+    const CARD_TRIAGE_TOOL = {
+        name: 'card_triage',
+        description: 'Triage a job card based on limited information (title, company, location)',
+        input_schema: {
+            type: 'object',
+            properties: {
+                decision: {
+                    type: 'string',
+                    enum: ['reject', 'keep', 'maybe'],
+                    description: 'reject=clearly irrelevant, keep=clearly relevant, maybe=need full details to decide'
+                }
+            },
+            required: ['decision']
+        }
+    };
+
+    /** Tool for final decision after full job review (Full AI mode) */
+    const FULL_EVALUATION_TOOL = {
+        name: 'full_evaluation',
+        description: 'Final decision after reviewing full job details',
+        input_schema: {
+            type: 'object',
+            properties: {
+                accept: {
+                    type: 'boolean',
+                    description: 'true to accept and save the job, false to reject'
+                }
+            },
+            required: ['accept']
+        }
+    };
+
     const AIClient = {
         /** Conversation history for the current page */
         conversationHistory: [],
 
         /** Flag indicating if the conversation has been initialized with criteria */
         isInitialized: false,
+
+        /** Flag indicating if Full AI mode (three-tier) is active for this session */
+        fullAIMode: false,
 
         /**
          * Check if the AI client is properly configured with API key and criteria.
@@ -2780,50 +2924,86 @@ You will receive the user's criteria first, then job cards one at a time. Each c
         resetConversation: function() {
             this.conversationHistory = [];
             this.isInitialized = false;
+            // Note: fullAIMode is set during initConversation, not reset here
             console.log('[LiSeSca] AI conversation reset for new page.');
         },
 
         /**
          * Initialize the conversation with user criteria.
          * Creates the initial message exchange that sets up the context.
+         * @param {boolean} fullAIMode - If true, use three-tier evaluation mode.
          * @returns {Promise<void>}
          */
-        initConversation: function() {
+        initConversation: function(fullAIMode) {
             if (this.isInitialized) {
                 return Promise.resolve();
             }
 
-            // Set up the initial conversation with criteria
-            this.conversationHistory = [
-                {
-                    role: 'user',
-                    content: 'My job search criteria:\n\n' + CONFIG.JOB_CRITERIA + '\n\nI will send you job cards one at a time. Evaluate each one using the job_evaluation tool.'
-                },
-                {
-                    role: 'assistant',
-                    content: [
-                        {
-                            type: 'tool_use',
-                            id: 'init_ack',
-                            name: 'job_evaluation',
-                            input: { download: true }
-                        }
-                    ]
-                },
-                {
-                    role: 'user',
-                    content: [
-                        {
-                            type: 'tool_result',
-                            tool_use_id: 'init_ack',
-                            content: 'Ready to evaluate jobs.'
-                        }
-                    ]
-                }
-            ];
+            this.fullAIMode = fullAIMode === true;
+
+            if (this.fullAIMode) {
+                // Full AI mode: three-tier evaluation (reject/keep/maybe)
+                this.conversationHistory = [
+                    {
+                        role: 'user',
+                        content: 'My job search criteria:\n\n' + CONFIG.JOB_CRITERIA + '\n\nI will send you job cards one at a time. Use the card_triage tool to decide: reject (clearly irrelevant), keep (clearly relevant), or maybe (need full details).'
+                    },
+                    {
+                        role: 'assistant',
+                        content: [
+                            {
+                                type: 'tool_use',
+                                id: 'init_ack',
+                                name: 'card_triage',
+                                input: { decision: 'maybe' }
+                            }
+                        ]
+                    },
+                    {
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'tool_result',
+                                tool_use_id: 'init_ack',
+                                content: 'Ready to evaluate jobs using three-tier triage.'
+                            }
+                        ]
+                    }
+                ];
+                console.log('[LiSeSca] AI conversation initialized (fullAI=true).');
+            } else {
+                // Basic mode: binary evaluation (download/skip)
+                this.conversationHistory = [
+                    {
+                        role: 'user',
+                        content: 'My job search criteria:\n\n' + CONFIG.JOB_CRITERIA + '\n\nI will send you job cards one at a time. Evaluate each one using the job_evaluation tool.'
+                    },
+                    {
+                        role: 'assistant',
+                        content: [
+                            {
+                                type: 'tool_use',
+                                id: 'init_ack',
+                                name: 'job_evaluation',
+                                input: { download: true }
+                            }
+                        ]
+                    },
+                    {
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'tool_result',
+                                tool_use_id: 'init_ack',
+                                content: 'Ready to evaluate jobs.'
+                            }
+                        ]
+                    }
+                ];
+                console.log('[LiSeSca] AI conversation initialized (fullAI=false).');
+            }
 
             this.isInitialized = true;
-            console.log('[LiSeSca] AI conversation initialized with criteria.');
             return Promise.resolve();
         },
 
@@ -2956,6 +3136,280 @@ You will receive the user's criteria first, then job cards one at a time. Each c
 
             } catch (error) {
                 console.error('[LiSeSca] Failed to parse AI response:', error);
+                resolve(true); // Fail-open
+            }
+        },
+
+        // ===== FULL AI MODE (Three-tier evaluation) =====
+
+        /**
+         * Triage a job card using three-tier evaluation (reject/keep/maybe).
+         * Only used in Full AI mode.
+         * @param {string} cardMarkdown - The job card formatted as Markdown.
+         * @returns {Promise<string>} One of: 'reject', 'keep', or 'maybe'.
+         */
+        triageCard: function(cardMarkdown) {
+            var self = this;
+
+            if (!this.isConfigured()) {
+                console.warn('[LiSeSca] AI client not configured, returning "keep".');
+                return Promise.resolve('keep');
+            }
+
+            return this.initConversation(true).then(function() {
+                return self.sendCardForTriage(cardMarkdown);
+            }).catch(function(error) {
+                console.error('[LiSeSca] AI triage error, returning "keep":', error);
+                return 'keep'; // Fail-open: keep the job on error
+            });
+        },
+
+        /**
+         * Send a job card to Claude for three-tier triage.
+         * @param {string} cardMarkdown - The job card formatted as Markdown.
+         * @returns {Promise<string>} One of: 'reject', 'keep', or 'maybe'.
+         */
+        sendCardForTriage: function(cardMarkdown) {
+            var self = this;
+
+            var messagesWithJob = this.conversationHistory.concat([
+                { role: 'user', content: cardMarkdown }
+            ]);
+
+            var requestBody = {
+                model: 'claude-sonnet-4-5-20250929',
+                max_tokens: 100,
+                system: FULL_AI_SYSTEM_PROMPT,
+                tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
+                tool_choice: { type: 'tool', name: 'card_triage' },
+                messages: messagesWithJob
+            };
+
+            return new Promise(function(resolve, reject) {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://api.anthropic.com/v1/messages',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': CONFIG.ANTHROPIC_API_KEY,
+                        'anthropic-version': '2023-06-01'
+                    },
+                    data: JSON.stringify(requestBody),
+                    onload: function(response) {
+                        self.handleTriageResponse(response, cardMarkdown, resolve, reject);
+                    },
+                    onerror: function(error) {
+                        console.error('[LiSeSca] AI triage request failed:', error);
+                        reject(new Error('Network error'));
+                    },
+                    ontimeout: function() {
+                        console.error('[LiSeSca] AI triage request timed out');
+                        reject(new Error('Request timeout'));
+                    },
+                    timeout: 30000
+                });
+            });
+        },
+
+        /**
+         * Handle the triage API response and extract the decision.
+         * @param {Object} response - The GM_xmlhttpRequest response object.
+         * @param {string} cardMarkdown - The original job card.
+         * @param {Function} resolve - Promise resolve function.
+         * @param {Function} reject - Promise reject function.
+         */
+        handleTriageResponse: function(response, cardMarkdown, resolve, reject) {
+            if (response.status !== 200) {
+                console.error('[LiSeSca] AI triage API error:', response.status, response.responseText);
+                resolve('keep'); // Fail-open
+                return;
+            }
+
+            try {
+                var data = JSON.parse(response.responseText);
+
+                var toolUse = null;
+                if (data.content && Array.isArray(data.content)) {
+                    for (var i = 0; i < data.content.length; i++) {
+                        if (data.content[i].type === 'tool_use') {
+                            toolUse = data.content[i];
+                            break;
+                        }
+                    }
+                }
+
+                if (!toolUse || toolUse.name !== 'card_triage') {
+                    console.warn('[LiSeSca] Unexpected triage response format, returning "keep".');
+                    resolve('keep');
+                    return;
+                }
+
+                var decision = toolUse.input.decision;
+                if (decision !== 'reject' && decision !== 'keep' && decision !== 'maybe') {
+                    console.warn('[LiSeSca] Invalid triage decision "' + decision + '", returning "keep".');
+                    decision = 'keep';
+                }
+
+                // Update conversation history
+                this.conversationHistory.push({ role: 'user', content: cardMarkdown });
+                this.conversationHistory.push({
+                    role: 'assistant',
+                    content: [toolUse]
+                });
+
+                var resultMessage = '';
+                if (decision === 'reject') {
+                    resultMessage = 'Job rejected and skipped.';
+                } else if (decision === 'keep') {
+                    resultMessage = 'Job accepted. Fetching full details for output.';
+                } else {
+                    resultMessage = 'Need more information. Full job details will follow.';
+                }
+
+                this.conversationHistory.push({
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'tool_result',
+                            tool_use_id: toolUse.id,
+                            content: resultMessage
+                        }
+                    ]
+                });
+
+                console.log('[LiSeSca] AI triage: ' + decision.toUpperCase());
+                resolve(decision);
+
+            } catch (error) {
+                console.error('[LiSeSca] Failed to parse triage response:', error);
+                resolve('keep'); // Fail-open
+            }
+        },
+
+        /**
+         * Evaluate a full job description after a "maybe" triage decision.
+         * @param {string} fullJobMarkdown - The complete job formatted as Markdown.
+         * @returns {Promise<boolean>} True to accept the job, false to reject.
+         */
+        evaluateFullJob: function(fullJobMarkdown) {
+
+            if (!this.isConfigured()) {
+                console.warn('[LiSeSca] AI client not configured, accepting job.');
+                return Promise.resolve(true);
+            }
+
+            return this.sendFullJobForEvaluation(fullJobMarkdown).catch(function(error) {
+                console.error('[LiSeSca] AI full evaluation error, accepting job:', error);
+                return true; // Fail-open
+            });
+        },
+
+        /**
+         * Send full job details to Claude for final evaluation.
+         * @param {string} fullJobMarkdown - The complete job formatted as Markdown.
+         * @returns {Promise<boolean>} True to accept, false to reject.
+         */
+        sendFullJobForEvaluation: function(fullJobMarkdown) {
+            var self = this;
+
+            var contextMessage = 'Here are the full job details for your final decision:\n\n' + fullJobMarkdown;
+
+            var messagesWithJob = this.conversationHistory.concat([
+                { role: 'user', content: contextMessage }
+            ]);
+
+            var requestBody = {
+                model: 'claude-sonnet-4-5-20250929',
+                max_tokens: 100,
+                system: FULL_AI_SYSTEM_PROMPT,
+                tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
+                tool_choice: { type: 'tool', name: 'full_evaluation' },
+                messages: messagesWithJob
+            };
+
+            return new Promise(function(resolve, reject) {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: 'https://api.anthropic.com/v1/messages',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': CONFIG.ANTHROPIC_API_KEY,
+                        'anthropic-version': '2023-06-01'
+                    },
+                    data: JSON.stringify(requestBody),
+                    onload: function(response) {
+                        self.handleFullEvaluationResponse(response, contextMessage, resolve, reject);
+                    },
+                    onerror: function(error) {
+                        console.error('[LiSeSca] AI full evaluation request failed:', error);
+                        reject(new Error('Network error'));
+                    },
+                    ontimeout: function() {
+                        console.error('[LiSeSca] AI full evaluation request timed out');
+                        reject(new Error('Request timeout'));
+                    },
+                    timeout: 60000 // 60 second timeout for full job evaluation
+                });
+            });
+        },
+
+        /**
+         * Handle the full evaluation API response.
+         * @param {Object} response - The GM_xmlhttpRequest response object.
+         * @param {string} contextMessage - The message sent with full job details.
+         * @param {Function} resolve - Promise resolve function.
+         * @param {Function} reject - Promise reject function.
+         */
+        handleFullEvaluationResponse: function(response, contextMessage, resolve, reject) {
+            if (response.status !== 200) {
+                console.error('[LiSeSca] AI full evaluation API error:', response.status, response.responseText);
+                resolve(true); // Fail-open
+                return;
+            }
+
+            try {
+                var data = JSON.parse(response.responseText);
+
+                var toolUse = null;
+                if (data.content && Array.isArray(data.content)) {
+                    for (var i = 0; i < data.content.length; i++) {
+                        if (data.content[i].type === 'tool_use') {
+                            toolUse = data.content[i];
+                            break;
+                        }
+                    }
+                }
+
+                if (!toolUse || toolUse.name !== 'full_evaluation') {
+                    console.warn('[LiSeSca] Unexpected full evaluation response, accepting job.');
+                    resolve(true);
+                    return;
+                }
+
+                var accept = toolUse.input.accept === true;
+
+                // Update conversation history
+                this.conversationHistory.push({ role: 'user', content: contextMessage });
+                this.conversationHistory.push({
+                    role: 'assistant',
+                    content: [toolUse]
+                });
+                this.conversationHistory.push({
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'tool_result',
+                            tool_use_id: toolUse.id,
+                            content: accept ? 'Job accepted and saved.' : 'Job rejected after full review.'
+                        }
+                    ]
+                });
+
+                console.log('[LiSeSca] AI full evaluation: ' + (accept ? 'ACCEPT' : 'REJECT'));
+                resolve(accept);
+
+            } catch (error) {
+                console.error('[LiSeSca] Failed to parse full evaluation response:', error);
                 resolve(true); // Fail-open
             }
         }
@@ -4096,6 +4550,10 @@ You will receive the user's criteria first, then job cards one at a time. Each c
             var aiEnabled = State.readAIEnabledFromUI();
             State.saveAIEnabled(aiEnabled);
 
+            // Save Full AI enabled state from UI
+            var fullAIEnabled = State.readFullAIEnabledFromUI();
+            State.saveFullAIEnabled(fullAIEnabled);
+
             State.startSession(target, startPage, baseUrl, 'jobs');
             State.saveFormats(selectedFormats);
 
@@ -4263,6 +4721,8 @@ You will receive the user's criteria first, then job cards one at a time. Each c
 
                 // AI filtering: evaluate job card before downloading full details
                 if (aiEnabled) {
+                    var fullAIMode = State.getFullAIEnabled();
+
                     return JobExtractor.getRenderedCard(jobId).then(function(result) {
                         if (!result.card) {
                             // Can't get card data, proceed anyway
@@ -4273,27 +4733,99 @@ You will receive the user's criteria first, then job cards one at a time. Each c
                         var cardData = JobExtractor.extractCardBasics(result.card);
                         var cardMarkdown = JobExtractor.formatCardForAI(cardData);
 
-                        UI.showStatus(statusMsg + ' — AI evaluating...');
+                        if (fullAIMode) {
+                            // THREE-TIER EVALUATION (reject/keep/maybe)
+                            UI.showStatus(statusMsg + ' — AI triage...');
 
-                        return AIClient.evaluateJob(cardMarkdown).then(function(shouldDownload) {
-                            if (!State.isScraping()) {
-                                return null;
-                            }
+                            return AIClient.triageCard(cardMarkdown).then(function(decision) {
+                                if (!State.isScraping()) {
+                                    return null;
+                                }
 
-                            if (!shouldDownload) {
-                                console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
-                                UI.showStatus(statusMsg + ' — AI: Skip');
-                                State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
-                                return Emulator.randomDelay(300, 600).then(function() {
-                                    self.scrapeNextJob();
-                                }).then(function() {
-                                    return 'skip';
+                                if (decision === 'reject') {
+                                    // Reject: skip job entirely, no full details fetched
+                                    console.log('[LiSeSca] AI rejected job: ' + cardData.jobTitle);
+                                    UI.showStatus(statusMsg + ' — AI: Reject');
+                                    State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                    return Emulator.randomDelay(300, 600).then(function() {
+                                        self.scrapeNextJob();
+                                    }).then(function() {
+                                        return 'skip';
+                                    });
+                                }
+
+                                if (decision === 'keep') {
+                                    // Keep: accept job, fetch full details for output
+                                    console.log('[LiSeSca] AI kept job: ' + cardData.jobTitle);
+                                    UI.showStatus(statusMsg + ' — AI: Keep');
+                                    return JobExtractor.extractFullJob(jobId);
+                                }
+
+                                // Maybe: fetch full details, then ask AI again
+                                console.log('[LiSeSca] AI maybe on job: ' + cardData.jobTitle);
+                                UI.showStatus(statusMsg + ' — AI: Fetching details...');
+
+                                return JobExtractor.extractFullJob(jobId).then(function(job) {
+                                    if (!job) {
+                                        console.warn('[LiSeSca] Could not extract job for full evaluation');
+                                        return null;
+                                    }
+
+                                    if (!State.isScraping()) {
+                                        return null;
+                                    }
+
+                                    // Format full job for second AI evaluation
+                                    var fullJobMarkdown = JobOutput.formatJobMarkdown(job);
+                                    UI.showStatus(statusMsg + ' — AI: Full evaluation...');
+
+                                    return AIClient.evaluateFullJob(fullJobMarkdown).then(function(accept) {
+                                        if (!State.isScraping()) {
+                                            return null;
+                                        }
+
+                                        if (accept) {
+                                            console.log('[LiSeSca] AI accepted job after full review: ' + job.jobTitle);
+                                            UI.showStatus(statusMsg + ' — AI: Accept');
+                                            return job;
+                                        }
+
+                                        // Reject after full evaluation: skip
+                                        console.log('[LiSeSca] AI rejected job after full review: ' + job.jobTitle);
+                                        UI.showStatus(statusMsg + ' — AI: Reject (full)');
+                                        State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                        return Emulator.randomDelay(300, 600).then(function() {
+                                            self.scrapeNextJob();
+                                        }).then(function() {
+                                            return 'skip';
+                                        });
+                                    });
                                 });
-                            }
+                            });
+                        } else {
+                            // BASIC BINARY EVALUATION (download/skip)
+                            UI.showStatus(statusMsg + ' — AI evaluating...');
 
-                            console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
-                            return JobExtractor.extractFullJob(jobId);
-                        });
+                            return AIClient.evaluateJob(cardMarkdown).then(function(shouldDownload) {
+                                if (!State.isScraping()) {
+                                    return null;
+                                }
+
+                                if (!shouldDownload) {
+                                    console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
+                                    UI.showStatus(statusMsg + ' — AI: Skip');
+                                    State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                    return Emulator.randomDelay(300, 600).then(function() {
+                                        self.scrapeNextJob();
+                                    }).then(function() {
+                                        return 'skip';
+                                    });
+                                }
+
+                                console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
+                                return JobExtractor.extractFullJob(jobId);
+                            });
+                        }
                     });
                 }
 

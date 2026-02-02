@@ -14,6 +14,7 @@ export const State = {
         FORMATS: 'lisesca_formats',
         INCLUDE_VIEWED: 'lisesca_includeViewed',
         AI_ENABLED: 'lisesca_aiEnabled',          // AI job filtering toggle
+        FULL_AI_ENABLED: 'lisesca_fullAIEnabled', // Full AI evaluation toggle (three-tier)
         // Job-specific state keys
         SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
         JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
@@ -213,6 +214,35 @@ export const State = {
      */
     getAIEnabled: function() {
         return this.get(this.KEYS.AI_ENABLED, false);
+    },
+
+    /**
+     * Read the "Full AI evaluation" preference from the UI checkbox.
+     * @returns {boolean} True if full AI evaluation is enabled.
+     */
+    readFullAIEnabledFromUI: function() {
+        var fullAICheck = document.getElementById('lisesca-full-ai-enabled');
+        if (!fullAICheck) {
+            return false;
+        }
+        return fullAICheck.checked;
+    },
+
+    /**
+     * Save the "Full AI evaluation" preference to persistent storage.
+     * @param {boolean} fullAIEnabled - True to enable full AI evaluation.
+     */
+    saveFullAIEnabled: function(fullAIEnabled) {
+        this.set(this.KEYS.FULL_AI_ENABLED, fullAIEnabled === true);
+    },
+
+    /**
+     * Retrieve the saved "Full AI evaluation" preference.
+     * Defaults to false if not set.
+     * @returns {boolean}
+     */
+    getFullAIEnabled: function() {
+        return this.get(this.KEYS.FULL_AI_ENABLED, false);
     },
 
     /**
