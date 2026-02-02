@@ -26,8 +26,12 @@ Use the card_triage tool to make one of three decisions:
 
 Be CONSERVATIVE with "reject" - only use when truly certain the job is irrelevant. When in doubt, use "maybe" to request full details.
 
+ALWAYS provide a brief reason explaining your decision. For rejections, explain WHY the job doesn't match (e.g., "Senior management role, user seeks IC positions", "Healthcare industry, user wants tech").
+
 STAGE 2 - FULL EVALUATION (complete job description):
 When you receive full job details after a "maybe" decision, use the full_evaluation tool to make a final accept/reject based on comprehensive analysis of requirements, responsibilities, qualifications, and company info.
+
+ALWAYS provide a reason for your decision, especially for rejections. Be specific about what criteria the job fails to meet.
 
 You will receive the user's criteria first, then job cards one at a time.`;
 
@@ -58,9 +62,13 @@ const CARD_TRIAGE_TOOL = {
                 type: 'string',
                 enum: ['reject', 'keep', 'maybe'],
                 description: 'reject=clearly irrelevant, keep=clearly relevant, maybe=need full details to decide'
+            },
+            reason: {
+                type: 'string',
+                description: 'Brief explanation for the decision (required for reject, optional for keep/maybe)'
             }
         },
-        required: ['decision']
+        required: ['decision', 'reason']
     }
 };
 
@@ -74,9 +82,13 @@ const FULL_EVALUATION_TOOL = {
             accept: {
                 type: 'boolean',
                 description: 'true to accept and save the job, false to reject'
+            },
+            reason: {
+                type: 'string',
+                description: 'Brief explanation for the decision (especially important for rejections)'
             }
         },
-        required: ['accept']
+        required: ['accept', 'reason']
     }
 };
 
@@ -326,28 +338,28 @@ export const AIClient = {
      * Triage a job card using three-tier evaluation (reject/keep/maybe).
      * Only used in Full AI mode.
      * @param {string} cardMarkdown - The job card formatted as Markdown.
-     * @returns {Promise<string>} One of: 'reject', 'keep', or 'maybe'.
+     * @returns {Promise<{decision: string, reason: string}>} Decision object with reason.
      */
     triageCard: function(cardMarkdown) {
         var self = this;
 
         if (!this.isConfigured()) {
             console.warn('[LiSeSca] AI client not configured, returning "keep".');
-            return Promise.resolve('keep');
+            return Promise.resolve({ decision: 'keep', reason: 'AI not configured' });
         }
 
         return this.initConversation(true).then(function() {
             return self.sendCardForTriage(cardMarkdown);
         }).catch(function(error) {
             console.error('[LiSeSca] AI triage error, returning "keep":', error);
-            return 'keep'; // Fail-open: keep the job on error
+            return { decision: 'keep', reason: 'Error: ' + error.message }; // Fail-open
         });
     },
 
     /**
      * Send a job card to Claude for three-tier triage.
      * @param {string} cardMarkdown - The job card formatted as Markdown.
-     * @returns {Promise<string>} One of: 'reject', 'keep', or 'maybe'.
+     * @returns {Promise<{decision: string, reason: string}>} Decision object with reason.
      */
     sendCardForTriage: function(cardMarkdown) {
         var self = this;
@@ -358,7 +370,7 @@ export const AIClient = {
 
         var requestBody = {
             model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 100,
+            max_tokens: 200,  // Increased for reason text
             system: FULL_AI_SYSTEM_PROMPT,
             tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
             tool_choice: { type: 'tool', name: 'card_triage' },
@@ -401,7 +413,7 @@ export const AIClient = {
     handleTriageResponse: function(response, cardMarkdown, resolve, reject) {
         if (response.status !== 200) {
             console.error('[LiSeSca] AI triage API error:', response.status, response.responseText);
-            resolve('keep'); // Fail-open
+            resolve({ decision: 'keep', reason: 'API error ' + response.status }); // Fail-open
             return;
         }
 
@@ -420,14 +432,17 @@ export const AIClient = {
 
             if (!toolUse || toolUse.name !== 'card_triage') {
                 console.warn('[LiSeSca] Unexpected triage response format, returning "keep".');
-                resolve('keep');
+                resolve({ decision: 'keep', reason: 'Unexpected response format' });
                 return;
             }
 
             var decision = toolUse.input.decision;
+            var reason = toolUse.input.reason || '(no reason provided)';
+
             if (decision !== 'reject' && decision !== 'keep' && decision !== 'maybe') {
                 console.warn('[LiSeSca] Invalid triage decision "' + decision + '", returning "keep".');
                 decision = 'keep';
+                reason = 'Invalid decision value: ' + decision;
             }
 
             // Update conversation history
@@ -457,38 +472,37 @@ export const AIClient = {
                 ]
             });
 
-            console.log('[LiSeSca] AI triage: ' + decision.toUpperCase());
-            resolve(decision);
+            resolve({ decision: decision, reason: reason });
 
         } catch (error) {
             console.error('[LiSeSca] Failed to parse triage response:', error);
-            resolve('keep'); // Fail-open
+            resolve({ decision: 'keep', reason: 'Parse error: ' + error.message }); // Fail-open
         }
     },
 
     /**
      * Evaluate a full job description after a "maybe" triage decision.
      * @param {string} fullJobMarkdown - The complete job formatted as Markdown.
-     * @returns {Promise<boolean>} True to accept the job, false to reject.
+     * @returns {Promise<{accept: boolean, reason: string}>} Decision object with reason.
      */
     evaluateFullJob: function(fullJobMarkdown) {
         var self = this;
 
         if (!this.isConfigured()) {
             console.warn('[LiSeSca] AI client not configured, accepting job.');
-            return Promise.resolve(true);
+            return Promise.resolve({ accept: true, reason: 'AI not configured' });
         }
 
         return this.sendFullJobForEvaluation(fullJobMarkdown).catch(function(error) {
             console.error('[LiSeSca] AI full evaluation error, accepting job:', error);
-            return true; // Fail-open
+            return { accept: true, reason: 'Error: ' + error.message }; // Fail-open
         });
     },
 
     /**
      * Send full job details to Claude for final evaluation.
      * @param {string} fullJobMarkdown - The complete job formatted as Markdown.
-     * @returns {Promise<boolean>} True to accept, false to reject.
+     * @returns {Promise<{accept: boolean, reason: string}>} Decision object with reason.
      */
     sendFullJobForEvaluation: function(fullJobMarkdown) {
         var self = this;
@@ -501,7 +515,7 @@ export const AIClient = {
 
         var requestBody = {
             model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 100,
+            max_tokens: 300,  // Increased for detailed reason text
             system: FULL_AI_SYSTEM_PROMPT,
             tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
             tool_choice: { type: 'tool', name: 'full_evaluation' },
@@ -544,7 +558,7 @@ export const AIClient = {
     handleFullEvaluationResponse: function(response, contextMessage, resolve, reject) {
         if (response.status !== 200) {
             console.error('[LiSeSca] AI full evaluation API error:', response.status, response.responseText);
-            resolve(true); // Fail-open
+            resolve({ accept: true, reason: 'API error ' + response.status }); // Fail-open
             return;
         }
 
@@ -563,11 +577,12 @@ export const AIClient = {
 
             if (!toolUse || toolUse.name !== 'full_evaluation') {
                 console.warn('[LiSeSca] Unexpected full evaluation response, accepting job.');
-                resolve(true);
+                resolve({ accept: true, reason: 'Unexpected response format' });
                 return;
             }
 
             var accept = toolUse.input.accept === true;
+            var reason = toolUse.input.reason || '(no reason provided)';
 
             // Update conversation history
             this.conversationHistory.push({ role: 'user', content: contextMessage });
@@ -586,12 +601,11 @@ export const AIClient = {
                 ]
             });
 
-            console.log('[LiSeSca] AI full evaluation: ' + (accept ? 'ACCEPT' : 'REJECT'));
-            resolve(accept);
+            resolve({ accept: accept, reason: reason });
 
         } catch (error) {
             console.error('[LiSeSca] Failed to parse full evaluation response:', error);
-            resolve(true); // Fail-open
+            resolve({ accept: true, reason: 'Parse error: ' + error.message }); // Fail-open
         }
     }
 };
