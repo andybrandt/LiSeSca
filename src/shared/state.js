@@ -15,6 +15,8 @@ export const State = {
         INCLUDE_VIEWED: 'lisesca_includeViewed',
         AI_ENABLED: 'lisesca_aiEnabled',          // AI job filtering toggle
         FULL_AI_ENABLED: 'lisesca_fullAIEnabled', // Full AI evaluation toggle (three-tier)
+        PEOPLE_AI_ENABLED: 'lisesca_peopleAIEnabled',          // AI people filtering toggle
+        PEOPLE_FULL_AI_ENABLED: 'lisesca_peopleFullAIEnabled', // Full AI evaluation toggle for people
         // Job-specific state keys
         SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
         JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
@@ -22,7 +24,14 @@ export const State = {
         JOB_TOTAL: 'lisesca_jobTotal',            // total jobs count for "All" mode
         // AI evaluation statistics
         AI_JOBS_EVALUATED: 'lisesca_aiJobsEvaluated',  // count of jobs evaluated by AI
-        AI_JOBS_ACCEPTED: 'lisesca_aiJobsAccepted'     // count of jobs accepted by AI
+        AI_JOBS_ACCEPTED: 'lisesca_aiJobsAccepted',    // count of jobs accepted by AI
+        AI_PEOPLE_EVALUATED: 'lisesca_aiPeopleEvaluated', // count of people evaluated by AI
+        AI_PEOPLE_ACCEPTED: 'lisesca_aiPeopleAccepted',   // count of people accepted by AI
+        // People deep-scrape state keys
+        CURRENT_PROFILE_URL: 'lisesca_currentProfileUrl',
+        DEEP_SCRAPE_MODE: 'lisesca_deepScrapeMode',   // 'normal' or 'deep'
+        PROFILE_INDEX: 'lisesca_profileIndex',        // current profile index on page (0-based)
+        PROFILES_ON_PAGE: 'lisesca_profilesOnPage'    // JSON array of profiles for current page
     },
 
     /**
@@ -76,7 +85,11 @@ export const State = {
             includeViewed: this.getIncludeViewed(),
             scrapeMode: this.getScrapeMode(),
             jobIndex: this.get(this.KEYS.JOB_INDEX, 0),
-            jobIdsOnPage: this.getJobIdsOnPage()
+            jobIdsOnPage: this.getJobIdsOnPage(),
+            profileIndex: this.get(this.KEYS.PROFILE_INDEX, 0),
+            profilesOnPage: this.getProfilesOnPage(),
+            currentProfileUrl: this.get(this.KEYS.CURRENT_PROFILE_URL, ''),
+            deepScrapeMode: this.get(this.KEYS.DEEP_SCRAPE_MODE, 'normal')
         };
     },
 
@@ -102,6 +115,13 @@ export const State = {
         // Reset AI evaluation counters
         this.set(this.KEYS.AI_JOBS_EVALUATED, 0);
         this.set(this.KEYS.AI_JOBS_ACCEPTED, 0);
+        this.set(this.KEYS.AI_PEOPLE_EVALUATED, 0);
+        this.set(this.KEYS.AI_PEOPLE_ACCEPTED, 0);
+        // Reset people deep-scrape state
+        this.set(this.KEYS.CURRENT_PROFILE_URL, '');
+        this.set(this.KEYS.DEEP_SCRAPE_MODE, 'normal');
+        this.set(this.KEYS.PROFILE_INDEX, 0);
+        this.set(this.KEYS.PROFILES_ON_PAGE, JSON.stringify([]));
         console.log('[LiSeSca] Session started: mode=' + (scrapeMode || 'people')
             + ', pages=' + targetPageCount + ', startPage=' + startPage);
     },
@@ -194,6 +214,64 @@ export const State = {
     },
 
     /**
+     * Read the "AI people selection" preference from the UI checkbox.
+     * @returns {boolean} True if AI filtering is enabled for people.
+     */
+    readPeopleAIEnabledFromUI: function() {
+        var aiEnabledCheck = document.getElementById('lisesca-people-ai-enabled');
+        if (!aiEnabledCheck) {
+            return false;
+        }
+        return aiEnabledCheck.checked;
+    },
+
+    /**
+     * Save the "AI people selection" preference to persistent storage.
+     * @param {boolean} aiEnabled - True to enable AI filtering for people.
+     */
+    savePeopleAIEnabled: function(aiEnabled) {
+        this.set(this.KEYS.PEOPLE_AI_ENABLED, aiEnabled === true);
+    },
+
+    /**
+     * Retrieve the saved "AI people selection" preference.
+     * Defaults to false if not set.
+     * @returns {boolean}
+     */
+    getPeopleAIEnabled: function() {
+        return this.get(this.KEYS.PEOPLE_AI_ENABLED, false);
+    },
+
+    /**
+     * Read the "Full AI evaluation" preference from the UI checkbox (people).
+     * @returns {boolean} True if full AI evaluation is enabled for people.
+     */
+    readPeopleFullAIEnabledFromUI: function() {
+        var fullAICheck = document.getElementById('lisesca-people-full-ai-enabled');
+        if (!fullAICheck) {
+            return false;
+        }
+        return fullAICheck.checked;
+    },
+
+    /**
+     * Save the "Full AI evaluation" preference to persistent storage (people).
+     * @param {boolean} fullAIEnabled - True to enable full AI evaluation for people.
+     */
+    savePeopleFullAIEnabled: function(fullAIEnabled) {
+        this.set(this.KEYS.PEOPLE_FULL_AI_ENABLED, fullAIEnabled === true);
+    },
+
+    /**
+     * Retrieve the saved "Full AI evaluation" preference for people.
+     * Defaults to false if not set.
+     * @returns {boolean}
+     */
+    getPeopleFullAIEnabled: function() {
+        return this.get(this.KEYS.PEOPLE_FULL_AI_ENABLED, false);
+    },
+
+    /**
      * Read the "AI job selection" preference from the UI checkbox.
      * @returns {boolean} True if AI filtering is enabled.
      */
@@ -268,6 +346,22 @@ export const State = {
     },
 
     /**
+     * Get the count of people evaluated by AI in this session.
+     * @returns {number}
+     */
+    getAIPeopleEvaluated: function() {
+        return this.get(this.KEYS.AI_PEOPLE_EVALUATED, 0);
+    },
+
+    /**
+     * Get the count of people accepted by AI in this session.
+     * @returns {number}
+     */
+    getAIPeopleAccepted: function() {
+        return this.get(this.KEYS.AI_PEOPLE_ACCEPTED, 0);
+    },
+
+    /**
      * Increment the AI jobs evaluated counter.
      */
     incrementAIJobsEvaluated: function() {
@@ -281,6 +375,22 @@ export const State = {
     incrementAIJobsAccepted: function() {
         var current = this.get(this.KEYS.AI_JOBS_ACCEPTED, 0);
         this.set(this.KEYS.AI_JOBS_ACCEPTED, current + 1);
+    },
+
+    /**
+     * Increment the AI people evaluated counter.
+     */
+    incrementAIPeopleEvaluated: function() {
+        var current = this.get(this.KEYS.AI_PEOPLE_EVALUATED, 0);
+        this.set(this.KEYS.AI_PEOPLE_EVALUATED, current + 1);
+    },
+
+    /**
+     * Increment the AI people accepted counter.
+     */
+    incrementAIPeopleAccepted: function() {
+        var current = this.get(this.KEYS.AI_PEOPLE_ACCEPTED, 0);
+        this.set(this.KEYS.AI_PEOPLE_ACCEPTED, current + 1);
     },
 
     /**
@@ -312,6 +422,20 @@ export const State = {
     },
 
     /**
+     * Get the stored profiles for the current page (deep scrape).
+     * @returns {Array<Object>} Array of profile objects.
+     */
+    getProfilesOnPage: function() {
+        var raw = this.get(this.KEYS.PROFILES_ON_PAGE, '[]');
+        try {
+            return JSON.parse(raw);
+        } catch (error) {
+            console.warn('[LiSeSca] Failed to parse profiles on page, resetting:', error);
+            return [];
+        }
+    },
+
+    /**
      * Advance to the next page number.
      */
     advancePage: function() {
@@ -336,6 +460,12 @@ export const State = {
         GM_deleteValue(this.KEYS.JOB_TOTAL);
         GM_deleteValue(this.KEYS.AI_JOBS_EVALUATED);
         GM_deleteValue(this.KEYS.AI_JOBS_ACCEPTED);
+        GM_deleteValue(this.KEYS.AI_PEOPLE_EVALUATED);
+        GM_deleteValue(this.KEYS.AI_PEOPLE_ACCEPTED);
+        GM_deleteValue(this.KEYS.CURRENT_PROFILE_URL);
+        GM_deleteValue(this.KEYS.DEEP_SCRAPE_MODE);
+        GM_deleteValue(this.KEYS.PROFILE_INDEX);
+        GM_deleteValue(this.KEYS.PROFILES_ON_PAGE);
         console.log('[LiSeSca] Session state cleared.');
     }
 };

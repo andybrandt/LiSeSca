@@ -87,6 +87,31 @@ export const Extractor = {
     },
 
     /**
+     * Format a people card as Markdown for AI evaluation.
+     * @param {Object} profile - The card data from extractCard.
+     * @returns {string} Markdown-formatted card summary.
+     */
+    formatCardForAI: function(profile) {
+        var lines = [];
+        lines.push('## ' + (profile.fullName || 'Unknown Name'));
+
+        if (profile.description) {
+            lines.push('**Headline:** ' + profile.description);
+        }
+        if (profile.location) {
+            lines.push('**Location:** ' + profile.location);
+        }
+        if (profile.connectionDegree) {
+            lines.push('**Connection degree:** ' + profile.connectionDegree);
+        }
+        if (profile.profileUrl) {
+            lines.push('**Profile:** ' + profile.profileUrl);
+        }
+
+        return lines.join('\n');
+    },
+
+    /**
      * Extract the person's full name from the title link.
      * @param {HTMLElement} titleLink - The <a> element with data-view-name.
      * @returns {string} The full name, trimmed.

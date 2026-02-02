@@ -16,14 +16,40 @@ export const Output = {
 
         if (profile.connectionDegree === 0) {
             lines.push('No connection.');
-        } else {
+        } else if (profile.connectionDegree) {
             const ordinal = this.toOrdinal(profile.connectionDegree);
             lines.push('Connection: ' + ordinal);
         }
 
-        lines.push('Description: ' + (profile.description || '(none)'));
+        var headline = profile.headline || profile.description || '';
+        if (headline) {
+            lines.push('Headline: ' + headline);
+        }
         lines.push('Location: ' + (profile.location || '(none)'));
         lines.push('Full profile URL: ' + (profile.profileUrl || '(none)'));
+
+        if (profile.profileAbout) {
+            lines.push('');
+            lines.push('## About');
+            lines.push('');
+            lines.push(profile.profileAbout);
+        }
+
+        if (profile.currentRole) {
+            lines.push('');
+            lines.push('## Current Role');
+            lines.push('');
+            lines.push(this.formatRoleDetails(profile.currentRole));
+        }
+
+        if (profile.pastRoles && profile.pastRoles.length > 0) {
+            lines.push('');
+            lines.push('## Past Roles');
+            lines.push('');
+            profile.pastRoles.forEach(function(role, index) {
+                lines.push((index + 1) + '. ' + Output.formatRoleDetails(role));
+            });
+        }
 
         return lines.join('\n');
     },
@@ -55,21 +81,121 @@ export const Output = {
         return blocks.join('\n\n---\n\n') + '\n';
     },
 
-    COLUMN_HEADERS: ['Name', 'Title/Description', 'Location', 'LinkedIn URL', 'Connection degree'],
+    COLUMN_HEADERS_BASIC: ['Name', 'Title/Description', 'Location', 'LinkedIn URL', 'Connection degree'],
+    COLUMN_HEADERS_DEEP: [
+        'Name', 'Headline', 'Location', 'LinkedIn URL', 'Connection degree',
+        'About',
+        'Current Title', 'Current Company', 'Current Description', 'Current Location', 'Current Duration',
+        'Past Role 1', 'Past Role 2', 'Past Role 3'
+    ],
 
     /**
      * Convert a profile object into a row array.
      * @param {Object} profile - A profile data object.
      * @returns {Array<string|number>} Array of cell values.
      */
-    profileToRow: function(profile) {
+    profileToRow: function(profile, useDeep) {
+        if (!useDeep) {
+            return [
+                profile.fullName || '',
+                profile.description || '',
+                profile.location || '',
+                profile.profileUrl || '',
+                profile.connectionDegree || 0
+            ];
+        }
+
+        var currentRole = profile.currentRole || {};
+        var pastRoles = profile.pastRoles || [];
+
         return [
             profile.fullName || '',
-            profile.description || '',
+            profile.headline || profile.description || '',
             profile.location || '',
             profile.profileUrl || '',
-            profile.connectionDegree || 0
+            profile.connectionDegree || 0,
+            profile.profileAbout || '',
+            currentRole.title || '',
+            currentRole.company || '',
+            currentRole.description || '',
+            currentRole.location || '',
+            currentRole.duration || '',
+            this.formatRoleSummary(pastRoles[0]),
+            this.formatRoleSummary(pastRoles[1]),
+            this.formatRoleSummary(pastRoles[2])
         ];
+    },
+
+    /**
+     * Check if any profiles include deep data.
+     * @param {Array} profiles - Array of profile data objects.
+     * @returns {boolean}
+     */
+    hasDeepData: function(profiles) {
+        if (!profiles || profiles.length === 0) {
+            return false;
+        }
+        return profiles.some(function(profile) {
+            return !!(profile && (profile.currentRole || (profile.pastRoles && profile.pastRoles.length > 0)));
+        });
+    },
+
+    /**
+     * Format a role into a single-line summary.
+     * @param {Object} role - Role data.
+     * @returns {string}
+     */
+    formatRoleSummary: function(role) {
+        if (!role) {
+            return '';
+        }
+        var parts = [];
+        if (role.title) {
+            parts.push(role.title);
+        }
+        if (role.company) {
+            parts.push('@ ' + role.company);
+        }
+        var suffix = [];
+        if (role.duration) {
+            suffix.push(role.duration);
+        }
+        if (role.location) {
+            suffix.push(role.location);
+        }
+        var line = parts.join(' ');
+        if (suffix.length > 0) {
+            line += ' (' + suffix.join(', ') + ')';
+        }
+        return line;
+    },
+
+    /**
+     * Format a role with full details for Markdown.
+     * @param {Object} role - Role data.
+     * @returns {string}
+     */
+    formatRoleDetails: function(role) {
+        if (!role) {
+            return '(no details)';
+        }
+        var lines = [];
+        if (role.title) {
+            lines.push('Title: ' + role.title);
+        }
+        if (role.company) {
+            lines.push('Company: ' + role.company);
+        }
+        if (role.duration) {
+            lines.push('Duration: ' + role.duration);
+        }
+        if (role.location) {
+            lines.push('Location: ' + role.location);
+        }
+        if (role.description) {
+            lines.push('Description: ' + role.description);
+        }
+        return lines.join('\n');
     },
 
     /**
@@ -91,13 +217,15 @@ export const Output = {
         var self = this;
         var lines = [];
 
-        var headerLine = this.COLUMN_HEADERS.map(function(header) {
+        var useDeep = this.hasDeepData(profiles);
+        var headers = useDeep ? this.COLUMN_HEADERS_DEEP : this.COLUMN_HEADERS_BASIC;
+        var headerLine = headers.map(function(header) {
             return self.escapeCSVField(header);
         }).join(',');
         lines.push(headerLine);
 
         profiles.forEach(function(profile) {
-            var row = self.profileToRow(profile);
+            var row = self.profileToRow(profile, useDeep);
             var csvLine = row.map(function(cell) {
                 return self.escapeCSVField(cell);
             }).join(',');
@@ -114,9 +242,11 @@ export const Output = {
      */
     generateXLSX: function(profiles) {
         var self = this;
-        var data = [this.COLUMN_HEADERS];
+        var useDeep = this.hasDeepData(profiles);
+        var headers = useDeep ? this.COLUMN_HEADERS_DEEP : this.COLUMN_HEADERS_BASIC;
+        var data = [headers];
         profiles.forEach(function(profile) {
-            data.push(self.profileToRow(profile));
+            data.push(self.profileToRow(profile, useDeep));
         });
 
         var worksheet = XLSX.utils.aoa_to_sheet(data);

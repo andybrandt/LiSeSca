@@ -2,7 +2,7 @@
 // Default settings for the scraper. These can be overridden
 // by user preferences stored in Tampermonkey's persistent storage.
 export const CONFIG = {
-    VERSION: '0.3.15',
+    VERSION: '0.4.0',
     MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
     MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
     MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -13,6 +13,7 @@ export const CONFIG = {
     // AI filtering configuration (stored separately)
     ANTHROPIC_API_KEY: '',  // User's Anthropic API key
     JOB_CRITERIA: '',       // User's job search criteria (free-form text)
+    PEOPLE_CRITERIA: '',    // User's people search criteria (free-form text)
 
     /**
      * Load user-saved configuration from persistent storage.
@@ -58,6 +59,9 @@ export const CONFIG = {
                 if (aiParsed.JOB_CRITERIA !== undefined) {
                     this.JOB_CRITERIA = aiParsed.JOB_CRITERIA;
                 }
+                if (aiParsed.PEOPLE_CRITERIA !== undefined) {
+                    this.PEOPLE_CRITERIA = aiParsed.PEOPLE_CRITERIA;
+                }
             } catch (error) {
                 console.warn('[LiSeSca] Failed to parse saved AI config:', error);
             }
@@ -70,7 +74,8 @@ export const CONFIG = {
             MAX_JOB_REVIEW_TIME: this.MAX_JOB_REVIEW_TIME,
             MIN_JOB_PAUSE: this.MIN_JOB_PAUSE,
             MAX_JOB_PAUSE: this.MAX_JOB_PAUSE,
-            AI_CONFIGURED: !!(this.ANTHROPIC_API_KEY && this.JOB_CRITERIA)
+            AI_CONFIGURED: !!(this.ANTHROPIC_API_KEY && this.JOB_CRITERIA),
+            PEOPLE_AI_CONFIGURED: !!(this.ANTHROPIC_API_KEY && this.PEOPLE_CRITERIA)
         });
     },
 
@@ -96,7 +101,8 @@ export const CONFIG = {
     saveAIConfig: function() {
         var aiConfigData = JSON.stringify({
             ANTHROPIC_API_KEY: this.ANTHROPIC_API_KEY,
-            JOB_CRITERIA: this.JOB_CRITERIA
+            JOB_CRITERIA: this.JOB_CRITERIA,
+            PEOPLE_CRITERIA: this.PEOPLE_CRITERIA
         });
         GM_setValue('lisesca_ai_config', aiConfigData);
         console.log('[LiSeSca] AI config saved.');
@@ -108,5 +114,13 @@ export const CONFIG = {
      */
     isAIConfigured: function() {
         return !!(this.ANTHROPIC_API_KEY && this.JOB_CRITERIA);
+    },
+
+    /**
+     * Check if People AI filtering is properly configured.
+     * @returns {boolean} True if both API key and people criteria are set.
+     */
+    isPeopleAIConfigured: function() {
+        return !!(this.ANTHROPIC_API_KEY && this.PEOPLE_CRITERIA);
     }
 };

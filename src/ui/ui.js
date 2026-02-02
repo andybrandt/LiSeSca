@@ -726,6 +726,10 @@ export const UI = {
         var aiEnabledCheck = null;
         var fullAIRow = null;
         var fullAICheck = null;
+        var peopleAIEnabledRow = null;
+        var peopleAIEnabledCheck = null;
+        var peopleFullAIRow = null;
+        var peopleFullAICheck = null;
         if (isJobs) {
             includeViewedRow = document.createElement('div');
             includeViewedRow.className = 'lisesca-toggle-row';
@@ -808,6 +812,58 @@ export const UI = {
                     State.saveFullAIEnabled(false);
                 }
             });
+        } else {
+            // AI people selection toggle
+            peopleAIEnabledRow = document.createElement('div');
+            peopleAIEnabledRow.className = 'lisesca-toggle-row';
+
+            var peopleAIEnabledLabel = document.createElement('label');
+            peopleAIEnabledLabel.className = 'lisesca-checkbox-label';
+
+            var peopleAIConfigured = CONFIG.isPeopleAIConfigured();
+            if (!peopleAIConfigured) {
+                peopleAIEnabledLabel.classList.add('lisesca-disabled');
+            }
+
+            peopleAIEnabledCheck = document.createElement('input');
+            peopleAIEnabledCheck.type = 'checkbox';
+            peopleAIEnabledCheck.id = 'lisesca-people-ai-enabled';
+            peopleAIEnabledCheck.checked = peopleAIConfigured && State.getPeopleAIEnabled();
+            peopleAIEnabledCheck.disabled = !peopleAIConfigured;
+
+            peopleAIEnabledLabel.appendChild(peopleAIEnabledCheck);
+            peopleAIEnabledLabel.appendChild(document.createTextNode('AI Deep Scrape'));
+            peopleAIEnabledRow.appendChild(peopleAIEnabledLabel);
+
+            // Full AI evaluation toggle (indented, only visible when AI enabled)
+            peopleFullAIRow = document.createElement('div');
+            peopleFullAIRow.className = 'lisesca-toggle-row';
+            peopleFullAIRow.id = 'lisesca-people-full-ai-row';
+            peopleFullAIRow.style.marginLeft = '16px';
+            peopleFullAIRow.style.display = (peopleAIConfigured && peopleAIEnabledCheck.checked) ? 'flex' : 'none';
+
+            var peopleFullAILabel = document.createElement('label');
+            peopleFullAILabel.className = 'lisesca-checkbox-label';
+
+            peopleFullAICheck = document.createElement('input');
+            peopleFullAICheck.type = 'checkbox';
+            peopleFullAICheck.id = 'lisesca-people-full-ai-enabled';
+            peopleFullAICheck.checked = peopleAIConfigured && State.getPeopleFullAIEnabled();
+            peopleFullAICheck.disabled = !peopleAIConfigured;
+
+            peopleFullAICheck.addEventListener('change', function() {
+                State.savePeopleFullAIEnabled(peopleFullAICheck.checked);
+            });
+
+            peopleFullAILabel.appendChild(peopleFullAICheck);
+            peopleFullAILabel.appendChild(document.createTextNode('Full AI evaluation'));
+            peopleFullAIRow.appendChild(peopleFullAILabel);
+
+            // AI enabled toggle controls Full AI row visibility
+            peopleAIEnabledCheck.addEventListener('change', function() {
+                State.savePeopleAIEnabled(peopleAIEnabledCheck.checked);
+                UI.updatePeopleAIToggleState();
+            });
         }
 
         // GO button — dispatches to the correct controller
@@ -839,6 +895,12 @@ export const UI = {
         }
         if (fullAIRow) {
             this.menu.appendChild(fullAIRow);
+        }
+        if (peopleAIEnabledRow) {
+            this.menu.appendChild(peopleAIEnabledRow);
+        }
+        if (peopleFullAIRow) {
+            this.menu.appendChild(peopleFullAIRow);
         }
         this.menu.appendChild(goBtn);
 
@@ -927,6 +989,8 @@ export const UI = {
         this.isMenuOpen = !this.isMenuOpen;
         if (this.isMenuOpen) {
             this.updateJobsAllLabel();
+            this.updateAIToggleState();
+            this.updatePeopleAIToggleState();
             this.menu.classList.add('lisesca-open');
         } else {
             this.menu.classList.remove('lisesca-open');
@@ -1018,13 +1082,18 @@ export const UI = {
      * @param {number} evaluated - Number of jobs evaluated by AI.
      * @param {number} accepted - Number of jobs accepted by AI.
      */
-    showAIStats: function(evaluated, accepted) {
+    showAIStats: function(evaluated, accepted, labelSuffix) {
         var statsEl = document.getElementById('lisesca-ai-stats');
         if (!statsEl) {
             return;
         }
         if (evaluated > 0) {
-            statsEl.textContent = 'AI: ' + accepted + '/' + evaluated + ' accepted';
+            if (labelSuffix === '') {
+                statsEl.textContent = 'AI ' + accepted + '/' + evaluated;
+            } else {
+                var suffix = (labelSuffix === undefined) ? ' accepted' : labelSuffix;
+                statsEl.textContent = 'AI: ' + accepted + '/' + evaluated + suffix;
+            }
             statsEl.classList.add('lisesca-visible');
         } else {
             statsEl.textContent = '';
@@ -1400,7 +1469,7 @@ export const UI = {
 
         var title = document.createElement('div');
         title.className = 'lisesca-ai-config-title';
-        title.textContent = 'AI Job Filtering Configuration';
+        title.textContent = 'AI Filtering Configuration';
 
         // API Key row
         var apiKeyRow = document.createElement('div');
@@ -1434,7 +1503,7 @@ export const UI = {
 
         var criteriaTextarea = document.createElement('textarea');
         criteriaTextarea.id = 'lisesca-ai-criteria';
-        criteriaTextarea.rows = 12;
+        criteriaTextarea.rows = 10;
         criteriaTextarea.placeholder = 'Describe the job you are looking for...\n\nExample:\nI am looking for Senior Software Engineering Manager roles.\nI have 15 years of experience in software development.\nI prefer remote or hybrid positions.\nI am NOT interested in:\n- Manufacturing or industrial positions\n- Roles requiring specific domain expertise I don\'t have';
         criteriaTextarea.value = CONFIG.JOB_CRITERIA || '';
 
@@ -1445,6 +1514,28 @@ export const UI = {
         criteriaRow.appendChild(criteriaLabel);
         criteriaRow.appendChild(criteriaTextarea);
         criteriaRow.appendChild(criteriaHint);
+
+        // People Criteria row
+        var peopleCriteriaRow = document.createElement('div');
+        peopleCriteriaRow.className = 'lisesca-ai-config-row';
+
+        var peopleCriteriaLabel = document.createElement('label');
+        peopleCriteriaLabel.textContent = 'People Search Criteria:';
+        peopleCriteriaLabel.htmlFor = 'lisesca-ai-people-criteria';
+
+        var peopleCriteriaTextarea = document.createElement('textarea');
+        peopleCriteriaTextarea.id = 'lisesca-ai-people-criteria';
+        peopleCriteriaTextarea.rows = 10;
+        peopleCriteriaTextarea.placeholder = 'Describe the kind of people you want to connect with...\n\nExample:\nI am looking for senior engineers and engineering managers in Berlin.\nI want people who work in B2B SaaS or AI startups.\nI am NOT interested in:\n- Sales or HR roles\n- People outside the DACH region';
+        peopleCriteriaTextarea.value = CONFIG.PEOPLE_CRITERIA || '';
+
+        var peopleCriteriaHint = document.createElement('div');
+        peopleCriteriaHint.className = 'lisesca-hint';
+        peopleCriteriaHint.textContent = 'Describe your target contacts (roles, industries, locations, etc.).';
+
+        peopleCriteriaRow.appendChild(peopleCriteriaLabel);
+        peopleCriteriaRow.appendChild(peopleCriteriaTextarea);
+        peopleCriteriaRow.appendChild(peopleCriteriaHint);
 
         // Error display
         var errorDiv = document.createElement('div');
@@ -1476,6 +1567,7 @@ export const UI = {
         panel.appendChild(title);
         panel.appendChild(apiKeyRow);
         panel.appendChild(criteriaRow);
+        panel.appendChild(peopleCriteriaRow);
         panel.appendChild(errorDiv);
         panel.appendChild(buttonsRow);
 
@@ -1497,6 +1589,7 @@ export const UI = {
     showAIConfig: function() {
         document.getElementById('lisesca-ai-api-key').value = CONFIG.ANTHROPIC_API_KEY || '';
         document.getElementById('lisesca-ai-criteria').value = CONFIG.JOB_CRITERIA || '';
+        document.getElementById('lisesca-ai-people-criteria').value = CONFIG.PEOPLE_CRITERIA || '';
         document.getElementById('lisesca-ai-config-error').textContent = '';
         this.aiConfigOverlay.classList.add('lisesca-visible');
     },
@@ -1515,10 +1608,11 @@ export const UI = {
         var errorDiv = document.getElementById('lisesca-ai-config-error');
         var apiKey = document.getElementById('lisesca-ai-api-key').value.trim();
         var criteria = document.getElementById('lisesca-ai-criteria').value.trim();
+        var peopleCriteria = document.getElementById('lisesca-ai-people-criteria').value.trim();
 
-        // Both must be filled or both empty (to disable AI filtering)
-        if ((apiKey && !criteria) || (!apiKey && criteria)) {
-            errorDiv.textContent = 'Please fill in both fields, or leave both empty to disable AI filtering.';
+        // API key is required if any criteria is set
+        if (!apiKey && (criteria || peopleCriteria)) {
+            errorDiv.textContent = 'Please enter your API key to enable AI filtering.';
             return;
         }
 
@@ -1531,12 +1625,15 @@ export const UI = {
         // Save to CONFIG
         CONFIG.ANTHROPIC_API_KEY = apiKey;
         CONFIG.JOB_CRITERIA = criteria;
+        CONFIG.PEOPLE_CRITERIA = peopleCriteria;
         CONFIG.saveAIConfig();
 
         // Update the AI toggle state in the menu if it exists
         this.updateAIToggleState();
+        this.updatePeopleAIToggleState();
 
-        console.log('[LiSeSca] AI config saved. Configured: ' + CONFIG.isAIConfigured());
+        console.log('[LiSeSca] AI config saved. Job configured: '
+            + CONFIG.isAIConfigured() + ', People configured: ' + CONFIG.isPeopleAIConfigured());
         this.hideAIConfig();
     },
 
@@ -1576,6 +1673,45 @@ export const UI = {
                 fullAICheck.checked = false;
                 fullAICheck.disabled = true;
                 State.saveFullAIEnabled(false);
+            }
+        }
+    },
+
+    /**
+     * Update the People AI toggle checkbox state based on configuration.
+     * Disables the checkbox if AI is not configured.
+     * Also updates the Full AI toggle visibility and state.
+     */
+    updatePeopleAIToggleState: function() {
+        var aiCheck = document.getElementById('lisesca-people-ai-enabled');
+        var aiLabel = aiCheck ? aiCheck.closest('.lisesca-checkbox-label') : null;
+        var fullAIRow = document.getElementById('lisesca-people-full-ai-row');
+        var fullAICheck = document.getElementById('lisesca-people-full-ai-enabled');
+
+        if (!aiCheck || !aiLabel) {
+            return;
+        }
+
+        var isConfigured = CONFIG.isPeopleAIConfigured();
+        aiCheck.disabled = !isConfigured;
+
+        if (isConfigured) {
+            aiLabel.classList.remove('lisesca-disabled');
+        } else {
+            aiLabel.classList.add('lisesca-disabled');
+            aiCheck.checked = false;
+            State.savePeopleAIEnabled(false);
+        }
+
+        if (fullAIRow && fullAICheck) {
+            if (isConfigured && aiCheck.checked) {
+                fullAIRow.style.display = 'flex';
+                fullAICheck.disabled = false;
+            } else {
+                fullAIRow.style.display = 'none';
+                fullAICheck.checked = false;
+                fullAICheck.disabled = true;
+                State.savePeopleFullAIEnabled(false);
             }
         }
     },
