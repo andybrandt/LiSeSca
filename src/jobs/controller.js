@@ -53,6 +53,10 @@ export const JobController = {
         var aiEnabled = State.readAIEnabledFromUI();
         State.saveAIEnabled(aiEnabled);
 
+        // Save Full AI enabled state from UI
+        var fullAIEnabled = State.readFullAIEnabledFromUI();
+        State.saveFullAIEnabled(fullAIEnabled);
+
         State.startSession(target, startPage, baseUrl, 'jobs');
         State.saveFormats(selectedFormats);
 
@@ -199,6 +203,12 @@ export const JobController = {
         }
         UI.showStatus(statusMsg);
 
+        // Show AI stats if AI filtering is active
+        var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
+        if (aiEnabled) {
+            UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+        }
+
         var includeViewed = State.getIncludeViewed();
         var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
         var viewedCheck = includeViewed ? Promise.resolve(false) : JobExtractor.isJobViewed(jobId);
@@ -220,6 +230,8 @@ export const JobController = {
 
             // AI filtering: evaluate job card before downloading full details
             if (aiEnabled) {
+                var fullAIMode = State.getFullAIEnabled();
+
                 return JobExtractor.getRenderedCard(jobId).then(function(result) {
                     if (!result.card) {
                         // Can't get card data, proceed anyway
@@ -230,27 +242,113 @@ export const JobController = {
                     var cardData = JobExtractor.extractCardBasics(result.card);
                     var cardMarkdown = JobExtractor.formatCardForAI(cardData);
 
-                    UI.showStatus(statusMsg + ' — AI evaluating...');
+                    if (fullAIMode) {
+                        // THREE-TIER EVALUATION (reject/keep/maybe)
+                        UI.showStatus(statusMsg + ' — AI triage...');
 
-                    return AIClient.evaluateJob(cardMarkdown).then(function(shouldDownload) {
-                        if (!State.isScraping()) {
-                            return null;
-                        }
+                        return AIClient.triageCard(cardMarkdown).then(function(decision) {
+                            if (!State.isScraping()) {
+                                return null;
+                            }
 
-                        if (!shouldDownload) {
-                            console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
-                            UI.showStatus(statusMsg + ' — AI: Skip');
-                            State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
-                            return Emulator.randomDelay(300, 600).then(function() {
-                                self.scrapeNextJob();
-                            }).then(function() {
-                                return 'skip';
+                            // Count this job as evaluated
+                            State.incrementAIJobsEvaluated();
+                            UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+
+                            if (decision === 'reject') {
+                                // Reject: skip job entirely, no full details fetched
+                                console.log('[LiSeSca] AI rejected job: ' + cardData.jobTitle);
+                                UI.showStatus(statusMsg + ' — AI: Reject');
+                                State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                return Emulator.randomDelay(300, 600).then(function() {
+                                    self.scrapeNextJob();
+                                }).then(function() {
+                                    return 'skip';
+                                });
+                            }
+
+                            if (decision === 'keep') {
+                                // Keep: accept job, fetch full details for output
+                                console.log('[LiSeSca] AI kept job: ' + cardData.jobTitle);
+                                State.incrementAIJobsAccepted();
+                                UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+                                UI.showStatus(statusMsg + ' — AI: Keep');
+                                return JobExtractor.extractFullJob(jobId);
+                            }
+
+                            // Maybe: fetch full details, then ask AI again
+                            console.log('[LiSeSca] AI maybe on job: ' + cardData.jobTitle);
+                            UI.showStatus(statusMsg + ' — AI: Fetching details...');
+
+                            return JobExtractor.extractFullJob(jobId).then(function(job) {
+                                if (!job) {
+                                    console.warn('[LiSeSca] Could not extract job for full evaluation');
+                                    return null;
+                                }
+
+                                if (!State.isScraping()) {
+                                    return null;
+                                }
+
+                                // Format full job for second AI evaluation
+                                var fullJobMarkdown = JobOutput.formatJobMarkdown(job);
+                                UI.showStatus(statusMsg + ' — AI: Full evaluation...');
+
+                                return AIClient.evaluateFullJob(fullJobMarkdown).then(function(accept) {
+                                    if (!State.isScraping()) {
+                                        return null;
+                                    }
+
+                                    if (accept) {
+                                        console.log('[LiSeSca] AI accepted job after full review: ' + job.jobTitle);
+                                        State.incrementAIJobsAccepted();
+                                        UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+                                        UI.showStatus(statusMsg + ' — AI: Accept');
+                                        return job;
+                                    }
+
+                                    // Reject after full evaluation: skip
+                                    console.log('[LiSeSca] AI rejected job after full review: ' + job.jobTitle);
+                                    UI.showStatus(statusMsg + ' — AI: Reject (full)');
+                                    State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                    return Emulator.randomDelay(300, 600).then(function() {
+                                        self.scrapeNextJob();
+                                    }).then(function() {
+                                        return 'skip';
+                                    });
+                                });
                             });
-                        }
+                        });
+                    } else {
+                        // BASIC BINARY EVALUATION (download/skip)
+                        UI.showStatus(statusMsg + ' — AI evaluating...');
 
-                        console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
-                        return JobExtractor.extractFullJob(jobId);
-                    });
+                        return AIClient.evaluateJob(cardMarkdown).then(function(shouldDownload) {
+                            if (!State.isScraping()) {
+                                return null;
+                            }
+
+                            // Count this job as evaluated
+                            State.incrementAIJobsEvaluated();
+                            UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+
+                            if (!shouldDownload) {
+                                console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
+                                UI.showStatus(statusMsg + ' — AI: Skip');
+                                State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                return Emulator.randomDelay(300, 600).then(function() {
+                                    self.scrapeNextJob();
+                                }).then(function() {
+                                    return 'skip';
+                                });
+                            }
+
+                            console.log('[LiSeSca] AI approved job: ' + cardData.jobTitle);
+                            State.incrementAIJobsAccepted();
+                            UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+                            return JobExtractor.extractFullJob(jobId);
+                        });
+                    }
                 });
             }
 
@@ -371,22 +469,39 @@ export const JobController = {
         var state = State.getScrapingState();
         var pagesScraped = state.currentPage - state.startPage + 1;
 
+        // Get AI stats before clearing state
+        var aiEnabled = State.getAIEnabled();
+        var aiEvaluated = State.getAIJobsEvaluated();
+        var aiAccepted = State.getAIJobsAccepted();
+
         console.log('[LiSeSca] Job scraping finished! Total: ' + totalJobs + ' jobs across '
             + pagesScraped + ' page(s).');
+        if (aiEnabled && aiEvaluated > 0) {
+            console.log('[LiSeSca] AI stats: ' + aiAccepted + '/' + aiEvaluated + ' accepted.');
+        }
 
         UI.showProgress('');
+        UI.hideAIStats();
+
         if (totalJobs > 0) {
             UI.showStatus('Done! ' + totalJobs + ' jobs scraped across '
                 + pagesScraped + ' page(s). Downloading...');
             JobOutput.downloadResults(buffer);
+            State.clear();
+            setTimeout(function() {
+                UI.showIdleState();
+            }, 5000);
+        } else if (aiEnabled && aiEvaluated > 0) {
+            // AI filtering was active but no jobs matched - show special notification
+            State.clear();
+            UI.showNoResults(aiEvaluated, pagesScraped);
         } else {
             UI.showStatus('No jobs found.');
+            State.clear();
+            setTimeout(function() {
+                UI.showIdleState();
+            }, 5000);
         }
-
-        State.clear();
-        setTimeout(function() {
-            UI.showIdleState();
-        }, 5000);
     },
 
     /**

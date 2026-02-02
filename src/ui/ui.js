@@ -23,6 +23,7 @@ export const UI = {
     panel: null,
     menu: null,
     statusArea: null,
+    noResultsArea: null,
     isMenuOpen: false,
 
     /** Flag to prevent duplicate style injection (styles persist across SPA navigation) */
@@ -238,6 +239,59 @@ export const UI = {
             }
             .lisesca-stop-btn:hover {
                 background: #f85149;
+            }
+
+            /* AI stats display in progress area */
+            .lisesca-ai-stats {
+                display: none;
+                font-size: 11px;
+                color: #58a6ff;
+                margin-bottom: 4px;
+            }
+            .lisesca-ai-stats.lisesca-visible {
+                display: block;
+            }
+
+            /* No-results notification */
+            .lisesca-no-results {
+                display: none;
+                padding: 12px 10px;
+                border-top: 1px solid #30363d;
+                text-align: center;
+            }
+            .lisesca-no-results.lisesca-visible {
+                display: block;
+            }
+            .lisesca-no-results-icon {
+                font-size: 24px;
+                margin-bottom: 8px;
+                color: #8b949e;
+            }
+            .lisesca-no-results-title {
+                font-size: 13px;
+                font-weight: 600;
+                color: #e1e4e8;
+                margin-bottom: 6px;
+            }
+            .lisesca-no-results-stats {
+                font-size: 11px;
+                color: #8b949e;
+                margin-bottom: 10px;
+            }
+            .lisesca-no-results-btn {
+                width: 100%;
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+            }
+            .lisesca-no-results-btn:hover {
+                background: #30363d;
             }
 
             /* ---- Configuration overlay ---- */
@@ -670,6 +724,8 @@ export const UI = {
         var includeViewedCheck = null;
         var aiEnabledRow = null;
         var aiEnabledCheck = null;
+        var fullAIRow = null;
+        var fullAICheck = null;
         if (isJobs) {
             includeViewedRow = document.createElement('div');
             includeViewedRow.className = 'lisesca-toggle-row';
@@ -705,12 +761,53 @@ export const UI = {
             aiEnabledCheck.id = 'lisesca-ai-enabled';
             aiEnabledCheck.checked = aiConfigured && State.getAIEnabled();
             aiEnabledCheck.disabled = !aiConfigured;
-            aiEnabledCheck.addEventListener('change', function() {
-                State.saveAIEnabled(aiEnabledCheck.checked);
-            });
+
             aiEnabledLabel.appendChild(aiEnabledCheck);
             aiEnabledLabel.appendChild(document.createTextNode('AI job selection'));
             aiEnabledRow.appendChild(aiEnabledLabel);
+
+            // Full AI evaluation toggle (indented, only visible when AI enabled)
+            fullAIRow = document.createElement('div');
+            fullAIRow.className = 'lisesca-toggle-row';
+            fullAIRow.id = 'lisesca-full-ai-row';
+            fullAIRow.style.marginLeft = '16px';  // Visual hierarchy (indented)
+            fullAIRow.style.display = (aiConfigured && aiEnabledCheck.checked) ? 'flex' : 'none';
+
+            var fullAILabel = document.createElement('label');
+            fullAILabel.className = 'lisesca-checkbox-label';
+
+            fullAICheck = document.createElement('input');
+            fullAICheck.type = 'checkbox';
+            fullAICheck.id = 'lisesca-full-ai-enabled';
+            fullAICheck.checked = aiConfigured && State.getFullAIEnabled();
+            fullAICheck.disabled = !aiConfigured;
+
+            // Auto-uncheck "Include viewed" when Full AI is enabled
+            fullAICheck.addEventListener('change', function() {
+                State.saveFullAIEnabled(fullAICheck.checked);
+                if (fullAICheck.checked && includeViewedCheck) {
+                    includeViewedCheck.checked = false;
+                    State.saveIncludeViewed(false);
+                }
+            });
+
+            fullAILabel.appendChild(fullAICheck);
+            fullAILabel.appendChild(document.createTextNode('Full AI evaluation'));
+            fullAIRow.appendChild(fullAILabel);
+
+            // AI enabled toggle controls Full AI row visibility
+            aiEnabledCheck.addEventListener('change', function() {
+                State.saveAIEnabled(aiEnabledCheck.checked);
+                // Show/hide Full AI row based on AI enabled state
+                if (aiEnabledCheck.checked) {
+                    fullAIRow.style.display = 'flex';
+                } else {
+                    fullAIRow.style.display = 'none';
+                    // Also disable Full AI when AI is disabled
+                    fullAICheck.checked = false;
+                    State.saveFullAIEnabled(false);
+                }
+            });
         }
 
         // GO button — dispatches to the correct controller
@@ -740,6 +837,9 @@ export const UI = {
         if (aiEnabledRow) {
             this.menu.appendChild(aiEnabledRow);
         }
+        if (fullAIRow) {
+            this.menu.appendChild(fullAIRow);
+        }
         this.menu.appendChild(goBtn);
 
         // --- Status area ---
@@ -750,6 +850,12 @@ export const UI = {
         progressText.id = 'lisesca-status-progress';
         progressText.className = 'lisesca-status-progress';
         progressText.textContent = '';
+
+        // AI stats display (shown when AI filtering is active)
+        var aiStatsText = document.createElement('div');
+        aiStatsText.id = 'lisesca-ai-stats';
+        aiStatsText.className = 'lisesca-ai-stats';
+        aiStatsText.textContent = '';
 
         var statusText = document.createElement('div');
         statusText.id = 'lisesca-status-text';
@@ -769,13 +875,46 @@ export const UI = {
         });
 
         this.statusArea.appendChild(progressText);
+        this.statusArea.appendChild(aiStatsText);
         this.statusArea.appendChild(statusText);
         this.statusArea.appendChild(stopBtn);
+
+        // --- No-results notification area ---
+        this.noResultsArea = document.createElement('div');
+        this.noResultsArea.className = 'lisesca-no-results';
+        this.noResultsArea.id = 'lisesca-no-results';
+
+        var noResultsIcon = document.createElement('div');
+        noResultsIcon.className = 'lisesca-no-results-icon';
+        noResultsIcon.textContent = '\u2205'; // Empty set symbol
+
+        var noResultsTitle = document.createElement('div');
+        noResultsTitle.className = 'lisesca-no-results-title';
+        noResultsTitle.id = 'lisesca-no-results-title';
+        noResultsTitle.textContent = 'No matching jobs found';
+
+        var noResultsStats = document.createElement('div');
+        noResultsStats.className = 'lisesca-no-results-stats';
+        noResultsStats.id = 'lisesca-no-results-stats';
+        noResultsStats.textContent = '';
+
+        var noResultsBtn = document.createElement('button');
+        noResultsBtn.className = 'lisesca-no-results-btn';
+        noResultsBtn.textContent = 'OK';
+        noResultsBtn.addEventListener('click', function() {
+            UI.hideNoResults();
+        });
+
+        this.noResultsArea.appendChild(noResultsIcon);
+        this.noResultsArea.appendChild(noResultsTitle);
+        this.noResultsArea.appendChild(noResultsStats);
+        this.noResultsArea.appendChild(noResultsBtn);
 
         // --- Assemble panel ---
         this.panel.appendChild(topbar);
         this.panel.appendChild(this.menu);
         this.panel.appendChild(this.statusArea);
+        this.panel.appendChild(this.noResultsArea);
 
         document.body.appendChild(this.panel);
         console.log('[LiSeSca] UI panel injected (' + pageType + ' mode).');
@@ -868,8 +1007,78 @@ export const UI = {
     showIdleState: function() {
         this.hideStatus();
         this.showProgress('');
+        this.hideAIStats();
+        this.hideNoResults();
         this.menu.classList.remove('lisesca-open');
         this.isMenuOpen = false;
+    },
+
+    /**
+     * Show AI evaluation statistics in the status area.
+     * @param {number} evaluated - Number of jobs evaluated by AI.
+     * @param {number} accepted - Number of jobs accepted by AI.
+     */
+    showAIStats: function(evaluated, accepted) {
+        var statsEl = document.getElementById('lisesca-ai-stats');
+        if (!statsEl) {
+            return;
+        }
+        if (evaluated > 0) {
+            statsEl.textContent = 'AI: ' + accepted + '/' + evaluated + ' accepted';
+            statsEl.classList.add('lisesca-visible');
+        } else {
+            statsEl.textContent = '';
+            statsEl.classList.remove('lisesca-visible');
+        }
+    },
+
+    /**
+     * Hide the AI stats display.
+     */
+    hideAIStats: function() {
+        var statsEl = document.getElementById('lisesca-ai-stats');
+        if (statsEl) {
+            statsEl.textContent = '';
+            statsEl.classList.remove('lisesca-visible');
+        }
+    },
+
+    /**
+     * Show the no-results notification with statistics.
+     * @param {number} evaluated - Number of jobs evaluated by AI.
+     * @param {number} pagesScraped - Number of pages scanned.
+     */
+    showNoResults: function(evaluated, pagesScraped) {
+        // Hide status area first
+        this.hideStatus();
+        this.hideAIStats();
+
+        // Update the stats text
+        var statsEl = document.getElementById('lisesca-no-results-stats');
+        if (statsEl) {
+            var statsText = evaluated + ' job' + (evaluated !== 1 ? 's' : '') + ' scanned';
+            if (pagesScraped > 1) {
+                statsText += ' across ' + pagesScraped + ' pages';
+            }
+            statsText += ', none matched your criteria';
+            statsEl.textContent = statsText;
+        }
+
+        // Show the no-results area
+        var noResultsEl = document.getElementById('lisesca-no-results');
+        if (noResultsEl) {
+            noResultsEl.classList.add('lisesca-visible');
+        }
+    },
+
+    /**
+     * Hide the no-results notification.
+     */
+    hideNoResults: function() {
+        var noResultsEl = document.getElementById('lisesca-no-results');
+        if (noResultsEl) {
+            noResultsEl.classList.remove('lisesca-visible');
+        }
     },
 
     // --- Configuration panel ---
@@ -1334,10 +1543,13 @@ export const UI = {
     /**
      * Update the AI toggle checkbox state based on configuration.
      * Disables the checkbox if AI is not configured.
+     * Also updates the Full AI toggle visibility and state.
      */
     updateAIToggleState: function() {
         var aiCheck = document.getElementById('lisesca-ai-enabled');
         var aiLabel = aiCheck ? aiCheck.closest('.lisesca-checkbox-label') : null;
+        var fullAIRow = document.getElementById('lisesca-full-ai-row');
+        var fullAICheck = document.getElementById('lisesca-full-ai-enabled');
 
         if (!aiCheck || !aiLabel) {
             return;
@@ -1352,6 +1564,19 @@ export const UI = {
             aiLabel.classList.add('lisesca-disabled');
             aiCheck.checked = false;
             State.saveAIEnabled(false);
+        }
+
+        // Update Full AI toggle state
+        if (fullAIRow && fullAICheck) {
+            if (isConfigured && aiCheck.checked) {
+                fullAIRow.style.display = 'flex';
+                fullAICheck.disabled = false;
+            } else {
+                fullAIRow.style.display = 'none';
+                fullAICheck.checked = false;
+                fullAICheck.disabled = true;
+                State.saveFullAIEnabled(false);
+            }
         }
     },
 
@@ -1376,6 +1601,7 @@ export const UI = {
         this.panel = null;
         this.menu = null;
         this.statusArea = null;
+        this.noResultsArea = null;
         this.isMenuOpen = false;
     },
 
