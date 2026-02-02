@@ -245,11 +245,15 @@ export const JobController = {
                     if (fullAIMode) {
                         // THREE-TIER EVALUATION (reject/keep/maybe)
                         UI.showStatus(statusMsg + ' — AI triage...');
+                        var jobLink = 'https://www.linkedin.com/jobs/view/' + jobId;
 
-                        return AIClient.triageCard(cardMarkdown).then(function(decision) {
+                        return AIClient.triageCard(cardMarkdown).then(function(result) {
                             if (!State.isScraping()) {
                                 return null;
                             }
+
+                            var decision = result.decision;
+                            var reason = result.reason;
 
                             // Count this job as evaluated
                             State.incrementAIJobsEvaluated();
@@ -257,7 +261,10 @@ export const JobController = {
 
                             if (decision === 'reject') {
                                 // Reject: skip job entirely, no full details fetched
-                                console.log('[LiSeSca] AI rejected job: ' + cardData.jobTitle);
+                                // Log rejection with job link and reason for debugging
+                                console.log('[LiSeSca] AI TRIAGE REJECT: ' + cardData.jobTitle);
+                                console.log('  Link: ' + jobLink);
+                                console.log('  Reason: ' + reason);
                                 UI.showStatus(statusMsg + ' — AI: Reject');
                                 State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
                                 return Emulator.randomDelay(300, 600).then(function() {
@@ -269,7 +276,7 @@ export const JobController = {
 
                             if (decision === 'keep') {
                                 // Keep: accept job, fetch full details for output
-                                console.log('[LiSeSca] AI kept job: ' + cardData.jobTitle);
+                                console.log('[LiSeSca] AI kept job: ' + cardData.jobTitle + ' - ' + reason);
                                 State.incrementAIJobsAccepted();
                                 UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                 UI.showStatus(statusMsg + ' — AI: Keep');
@@ -277,7 +284,7 @@ export const JobController = {
                             }
 
                             // Maybe: fetch full details, then ask AI again
-                            console.log('[LiSeSca] AI maybe on job: ' + cardData.jobTitle);
+                            console.log('[LiSeSca] AI maybe on job: ' + cardData.jobTitle + ' - ' + reason);
                             UI.showStatus(statusMsg + ' — AI: Fetching details...');
 
                             return JobExtractor.extractFullJob(jobId).then(function(job) {
@@ -294,13 +301,16 @@ export const JobController = {
                                 var fullJobMarkdown = JobOutput.formatJobMarkdown(job);
                                 UI.showStatus(statusMsg + ' — AI: Full evaluation...');
 
-                                return AIClient.evaluateFullJob(fullJobMarkdown).then(function(accept) {
+                                return AIClient.evaluateFullJob(fullJobMarkdown).then(function(evalResult) {
                                     if (!State.isScraping()) {
                                         return null;
                                     }
 
+                                    var accept = evalResult.accept;
+                                    var evalReason = evalResult.reason;
+
                                     if (accept) {
-                                        console.log('[LiSeSca] AI accepted job after full review: ' + job.jobTitle);
+                                        console.log('[LiSeSca] AI accepted job after full review: ' + job.jobTitle + ' - ' + evalReason);
                                         State.incrementAIJobsAccepted();
                                         UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                         UI.showStatus(statusMsg + ' — AI: Accept');
@@ -308,7 +318,10 @@ export const JobController = {
                                     }
 
                                     // Reject after full evaluation: skip
-                                    console.log('[LiSeSca] AI rejected job after full review: ' + job.jobTitle);
+                                    // Log rejection with job link and reason for debugging
+                                    console.log('[LiSeSca] AI FULL REJECT: ' + job.jobTitle);
+                                    console.log('  Link: ' + jobLink);
+                                    console.log('  Reason: ' + evalReason);
                                     UI.showStatus(statusMsg + ' — AI: Reject (full)');
                                     State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
                                     return Emulator.randomDelay(300, 600).then(function() {

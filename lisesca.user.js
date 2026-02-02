@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.14
+// @version      0.3.15
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -27,7 +27,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.3.14',
+        VERSION: '0.3.15',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -3050,8 +3050,12 @@ Use the card_triage tool to make one of three decisions:
 
 Be CONSERVATIVE with "reject" - only use when truly certain the job is irrelevant. When in doubt, use "maybe" to request full details.
 
+ALWAYS provide a brief reason explaining your decision. For rejections, explain WHY the job doesn't match (e.g., "Senior management role, user seeks IC positions", "Healthcare industry, user wants tech").
+
 STAGE 2 - FULL EVALUATION (complete job description):
 When you receive full job details after a "maybe" decision, use the full_evaluation tool to make a final accept/reject based on comprehensive analysis of requirements, responsibilities, qualifications, and company info.
+
+ALWAYS provide a reason for your decision, especially for rejections. Be specific about what criteria the job fails to meet.
 
 You will receive the user's criteria first, then job cards one at a time.`;
 
@@ -3082,9 +3086,13 @@ You will receive the user's criteria first, then job cards one at a time.`;
                     type: 'string',
                     enum: ['reject', 'keep', 'maybe'],
                     description: 'reject=clearly irrelevant, keep=clearly relevant, maybe=need full details to decide'
+                },
+                reason: {
+                    type: 'string',
+                    description: 'Brief explanation for the decision (required for reject, optional for keep/maybe)'
                 }
             },
-            required: ['decision']
+            required: ['decision', 'reason']
         }
     };
 
@@ -3098,9 +3106,13 @@ You will receive the user's criteria first, then job cards one at a time.`;
                 accept: {
                     type: 'boolean',
                     description: 'true to accept and save the job, false to reject'
+                },
+                reason: {
+                    type: 'string',
+                    description: 'Brief explanation for the decision (especially important for rejections)'
                 }
             },
-            required: ['accept']
+            required: ['accept', 'reason']
         }
     };
 
@@ -3350,28 +3362,28 @@ You will receive the user's criteria first, then job cards one at a time.`;
          * Triage a job card using three-tier evaluation (reject/keep/maybe).
          * Only used in Full AI mode.
          * @param {string} cardMarkdown - The job card formatted as Markdown.
-         * @returns {Promise<string>} One of: 'reject', 'keep', or 'maybe'.
+         * @returns {Promise<{decision: string, reason: string}>} Decision object with reason.
          */
         triageCard: function(cardMarkdown) {
             var self = this;
 
             if (!this.isConfigured()) {
                 console.warn('[LiSeSca] AI client not configured, returning "keep".');
-                return Promise.resolve('keep');
+                return Promise.resolve({ decision: 'keep', reason: 'AI not configured' });
             }
 
             return this.initConversation(true).then(function() {
                 return self.sendCardForTriage(cardMarkdown);
             }).catch(function(error) {
                 console.error('[LiSeSca] AI triage error, returning "keep":', error);
-                return 'keep'; // Fail-open: keep the job on error
+                return { decision: 'keep', reason: 'Error: ' + error.message }; // Fail-open
             });
         },
 
         /**
          * Send a job card to Claude for three-tier triage.
          * @param {string} cardMarkdown - The job card formatted as Markdown.
-         * @returns {Promise<string>} One of: 'reject', 'keep', or 'maybe'.
+         * @returns {Promise<{decision: string, reason: string}>} Decision object with reason.
          */
         sendCardForTriage: function(cardMarkdown) {
             var self = this;
@@ -3382,7 +3394,7 @@ You will receive the user's criteria first, then job cards one at a time.`;
 
             var requestBody = {
                 model: 'claude-sonnet-4-5-20250929',
-                max_tokens: 100,
+                max_tokens: 200,  // Increased for reason text
                 system: FULL_AI_SYSTEM_PROMPT,
                 tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
                 tool_choice: { type: 'tool', name: 'card_triage' },
@@ -3425,7 +3437,7 @@ You will receive the user's criteria first, then job cards one at a time.`;
         handleTriageResponse: function(response, cardMarkdown, resolve, reject) {
             if (response.status !== 200) {
                 console.error('[LiSeSca] AI triage API error:', response.status, response.responseText);
-                resolve('keep'); // Fail-open
+                resolve({ decision: 'keep', reason: 'API error ' + response.status }); // Fail-open
                 return;
             }
 
@@ -3444,14 +3456,17 @@ You will receive the user's criteria first, then job cards one at a time.`;
 
                 if (!toolUse || toolUse.name !== 'card_triage') {
                     console.warn('[LiSeSca] Unexpected triage response format, returning "keep".');
-                    resolve('keep');
+                    resolve({ decision: 'keep', reason: 'Unexpected response format' });
                     return;
                 }
 
                 var decision = toolUse.input.decision;
+                var reason = toolUse.input.reason || '(no reason provided)';
+
                 if (decision !== 'reject' && decision !== 'keep' && decision !== 'maybe') {
                     console.warn('[LiSeSca] Invalid triage decision "' + decision + '", returning "keep".');
                     decision = 'keep';
+                    reason = 'Invalid decision value: ' + decision;
                 }
 
                 // Update conversation history
@@ -3481,37 +3496,36 @@ You will receive the user's criteria first, then job cards one at a time.`;
                     ]
                 });
 
-                console.log('[LiSeSca] AI triage: ' + decision.toUpperCase());
-                resolve(decision);
+                resolve({ decision: decision, reason: reason });
 
             } catch (error) {
                 console.error('[LiSeSca] Failed to parse triage response:', error);
-                resolve('keep'); // Fail-open
+                resolve({ decision: 'keep', reason: 'Parse error: ' + error.message }); // Fail-open
             }
         },
 
         /**
          * Evaluate a full job description after a "maybe" triage decision.
          * @param {string} fullJobMarkdown - The complete job formatted as Markdown.
-         * @returns {Promise<boolean>} True to accept the job, false to reject.
+         * @returns {Promise<{accept: boolean, reason: string}>} Decision object with reason.
          */
         evaluateFullJob: function(fullJobMarkdown) {
 
             if (!this.isConfigured()) {
                 console.warn('[LiSeSca] AI client not configured, accepting job.');
-                return Promise.resolve(true);
+                return Promise.resolve({ accept: true, reason: 'AI not configured' });
             }
 
             return this.sendFullJobForEvaluation(fullJobMarkdown).catch(function(error) {
                 console.error('[LiSeSca] AI full evaluation error, accepting job:', error);
-                return true; // Fail-open
+                return { accept: true, reason: 'Error: ' + error.message }; // Fail-open
             });
         },
 
         /**
          * Send full job details to Claude for final evaluation.
          * @param {string} fullJobMarkdown - The complete job formatted as Markdown.
-         * @returns {Promise<boolean>} True to accept, false to reject.
+         * @returns {Promise<{accept: boolean, reason: string}>} Decision object with reason.
          */
         sendFullJobForEvaluation: function(fullJobMarkdown) {
             var self = this;
@@ -3524,7 +3538,7 @@ You will receive the user's criteria first, then job cards one at a time.`;
 
             var requestBody = {
                 model: 'claude-sonnet-4-5-20250929',
-                max_tokens: 100,
+                max_tokens: 300,  // Increased for detailed reason text
                 system: FULL_AI_SYSTEM_PROMPT,
                 tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
                 tool_choice: { type: 'tool', name: 'full_evaluation' },
@@ -3567,7 +3581,7 @@ You will receive the user's criteria first, then job cards one at a time.`;
         handleFullEvaluationResponse: function(response, contextMessage, resolve, reject) {
             if (response.status !== 200) {
                 console.error('[LiSeSca] AI full evaluation API error:', response.status, response.responseText);
-                resolve(true); // Fail-open
+                resolve({ accept: true, reason: 'API error ' + response.status }); // Fail-open
                 return;
             }
 
@@ -3586,11 +3600,12 @@ You will receive the user's criteria first, then job cards one at a time.`;
 
                 if (!toolUse || toolUse.name !== 'full_evaluation') {
                     console.warn('[LiSeSca] Unexpected full evaluation response, accepting job.');
-                    resolve(true);
+                    resolve({ accept: true, reason: 'Unexpected response format' });
                     return;
                 }
 
                 var accept = toolUse.input.accept === true;
+                var reason = toolUse.input.reason || '(no reason provided)';
 
                 // Update conversation history
                 this.conversationHistory.push({ role: 'user', content: contextMessage });
@@ -3609,12 +3624,11 @@ You will receive the user's criteria first, then job cards one at a time.`;
                     ]
                 });
 
-                console.log('[LiSeSca] AI full evaluation: ' + (accept ? 'ACCEPT' : 'REJECT'));
-                resolve(accept);
+                resolve({ accept: accept, reason: reason });
 
             } catch (error) {
                 console.error('[LiSeSca] Failed to parse full evaluation response:', error);
-                resolve(true); // Fail-open
+                resolve({ accept: true, reason: 'Parse error: ' + error.message }); // Fail-open
             }
         }
     };
@@ -4946,11 +4960,15 @@ You will receive the user's criteria first, then job cards one at a time.`;
                         if (fullAIMode) {
                             // THREE-TIER EVALUATION (reject/keep/maybe)
                             UI.showStatus(statusMsg + ' — AI triage...');
+                            var jobLink = 'https://www.linkedin.com/jobs/view/' + jobId;
 
-                            return AIClient.triageCard(cardMarkdown).then(function(decision) {
+                            return AIClient.triageCard(cardMarkdown).then(function(result) {
                                 if (!State.isScraping()) {
                                     return null;
                                 }
+
+                                var decision = result.decision;
+                                var reason = result.reason;
 
                                 // Count this job as evaluated
                                 State.incrementAIJobsEvaluated();
@@ -4958,7 +4976,10 @@ You will receive the user's criteria first, then job cards one at a time.`;
 
                                 if (decision === 'reject') {
                                     // Reject: skip job entirely, no full details fetched
-                                    console.log('[LiSeSca] AI rejected job: ' + cardData.jobTitle);
+                                    // Log rejection with job link and reason for debugging
+                                    console.log('[LiSeSca] AI TRIAGE REJECT: ' + cardData.jobTitle);
+                                    console.log('  Link: ' + jobLink);
+                                    console.log('  Reason: ' + reason);
                                     UI.showStatus(statusMsg + ' — AI: Reject');
                                     State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
                                     return Emulator.randomDelay(300, 600).then(function() {
@@ -4970,7 +4991,7 @@ You will receive the user's criteria first, then job cards one at a time.`;
 
                                 if (decision === 'keep') {
                                     // Keep: accept job, fetch full details for output
-                                    console.log('[LiSeSca] AI kept job: ' + cardData.jobTitle);
+                                    console.log('[LiSeSca] AI kept job: ' + cardData.jobTitle + ' - ' + reason);
                                     State.incrementAIJobsAccepted();
                                     UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                     UI.showStatus(statusMsg + ' — AI: Keep');
@@ -4978,7 +4999,7 @@ You will receive the user's criteria first, then job cards one at a time.`;
                                 }
 
                                 // Maybe: fetch full details, then ask AI again
-                                console.log('[LiSeSca] AI maybe on job: ' + cardData.jobTitle);
+                                console.log('[LiSeSca] AI maybe on job: ' + cardData.jobTitle + ' - ' + reason);
                                 UI.showStatus(statusMsg + ' — AI: Fetching details...');
 
                                 return JobExtractor.extractFullJob(jobId).then(function(job) {
@@ -4995,13 +5016,16 @@ You will receive the user's criteria first, then job cards one at a time.`;
                                     var fullJobMarkdown = JobOutput.formatJobMarkdown(job);
                                     UI.showStatus(statusMsg + ' — AI: Full evaluation...');
 
-                                    return AIClient.evaluateFullJob(fullJobMarkdown).then(function(accept) {
+                                    return AIClient.evaluateFullJob(fullJobMarkdown).then(function(evalResult) {
                                         if (!State.isScraping()) {
                                             return null;
                                         }
 
+                                        var accept = evalResult.accept;
+                                        var evalReason = evalResult.reason;
+
                                         if (accept) {
-                                            console.log('[LiSeSca] AI accepted job after full review: ' + job.jobTitle);
+                                            console.log('[LiSeSca] AI accepted job after full review: ' + job.jobTitle + ' - ' + evalReason);
                                             State.incrementAIJobsAccepted();
                                             UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                             UI.showStatus(statusMsg + ' — AI: Accept');
@@ -5009,7 +5033,10 @@ You will receive the user's criteria first, then job cards one at a time.`;
                                         }
 
                                         // Reject after full evaluation: skip
-                                        console.log('[LiSeSca] AI rejected job after full review: ' + job.jobTitle);
+                                        // Log rejection with job link and reason for debugging
+                                        console.log('[LiSeSca] AI FULL REJECT: ' + job.jobTitle);
+                                        console.log('  Link: ' + jobLink);
+                                        console.log('  Reason: ' + evalReason);
                                         UI.showStatus(statusMsg + ' — AI: Reject (full)');
                                         State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
                                         return Emulator.randomDelay(300, 600).then(function() {
