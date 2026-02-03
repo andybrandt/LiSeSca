@@ -728,8 +728,6 @@ export const UI = {
         var fullAICheck = null;
         var peopleAIEnabledRow = null;
         var peopleAIEnabledCheck = null;
-        var peopleFullAIRow = null;
-        var peopleFullAICheck = null;
         if (isJobs) {
             includeViewedRow = document.createElement('div');
             includeViewedRow.className = 'lisesca-toggle-row';
@@ -813,7 +811,7 @@ export const UI = {
                 }
             });
         } else {
-            // AI people selection toggle
+            // AI people rating toggle
             peopleAIEnabledRow = document.createElement('div');
             peopleAIEnabledRow.className = 'lisesca-toggle-row';
 
@@ -831,39 +829,13 @@ export const UI = {
             peopleAIEnabledCheck.checked = peopleAIConfigured && State.getPeopleAIEnabled();
             peopleAIEnabledCheck.disabled = !peopleAIConfigured;
 
-            peopleAIEnabledLabel.appendChild(peopleAIEnabledCheck);
-            peopleAIEnabledLabel.appendChild(document.createTextNode('AI Deep Scrape'));
-            peopleAIEnabledRow.appendChild(peopleAIEnabledLabel);
-
-            // Full AI evaluation toggle (indented, only visible when AI enabled)
-            peopleFullAIRow = document.createElement('div');
-            peopleFullAIRow.className = 'lisesca-toggle-row';
-            peopleFullAIRow.id = 'lisesca-people-full-ai-row';
-            peopleFullAIRow.style.marginLeft = '16px';
-            peopleFullAIRow.style.display = (peopleAIConfigured && peopleAIEnabledCheck.checked) ? 'flex' : 'none';
-
-            var peopleFullAILabel = document.createElement('label');
-            peopleFullAILabel.className = 'lisesca-checkbox-label';
-
-            peopleFullAICheck = document.createElement('input');
-            peopleFullAICheck.type = 'checkbox';
-            peopleFullAICheck.id = 'lisesca-people-full-ai-enabled';
-            peopleFullAICheck.checked = peopleAIConfigured && State.getPeopleFullAIEnabled();
-            peopleFullAICheck.disabled = !peopleAIConfigured;
-
-            peopleFullAICheck.addEventListener('change', function() {
-                State.savePeopleFullAIEnabled(peopleFullAICheck.checked);
-            });
-
-            peopleFullAILabel.appendChild(peopleFullAICheck);
-            peopleFullAILabel.appendChild(document.createTextNode('Full AI evaluation'));
-            peopleFullAIRow.appendChild(peopleFullAILabel);
-
-            // AI enabled toggle controls Full AI row visibility
             peopleAIEnabledCheck.addEventListener('change', function() {
                 State.savePeopleAIEnabled(peopleAIEnabledCheck.checked);
-                UI.updatePeopleAIToggleState();
             });
+
+            peopleAIEnabledLabel.appendChild(peopleAIEnabledCheck);
+            peopleAIEnabledLabel.appendChild(document.createTextNode('AI Rating'));
+            peopleAIEnabledRow.appendChild(peopleAIEnabledLabel);
         }
 
         // GO button — dispatches to the correct controller
@@ -898,9 +870,6 @@ export const UI = {
         }
         if (peopleAIEnabledRow) {
             this.menu.appendChild(peopleAIEnabledRow);
-        }
-        if (peopleFullAIRow) {
-            this.menu.appendChild(peopleFullAIRow);
         }
         this.menu.appendChild(goBtn);
 
@@ -1114,22 +1083,32 @@ export const UI = {
 
     /**
      * Show the no-results notification with statistics.
-     * @param {number} evaluated - Number of jobs evaluated by AI.
+     * @param {number} evaluated - Number of items evaluated by AI.
      * @param {number} pagesScraped - Number of pages scanned.
+     * @param {string} itemType - Type of item ('job' or 'profile'). Defaults to 'job'.
      */
-    showNoResults: function(evaluated, pagesScraped) {
+    showNoResults: function(evaluated, pagesScraped, itemType) {
         // Hide status area first
         this.hideStatus();
         this.hideAIStats();
 
+        var type = itemType || 'job';
+        var plural = type + (evaluated !== 1 ? 's' : '');
+
+        // Update the title based on item type
+        var titleEl = document.getElementById('lisesca-no-results-title');
+        if (titleEl) {
+            titleEl.textContent = 'No matching ' + plural + ' found';
+        }
+
         // Update the stats text
         var statsEl = document.getElementById('lisesca-no-results-stats');
         if (statsEl) {
-            var statsText = evaluated + ' job' + (evaluated !== 1 ? 's' : '') + ' scanned';
+            var statsText = evaluated + ' ' + plural + ' scanned';
             if (pagesScraped > 1) {
                 statsText += ' across ' + pagesScraped + ' pages';
             }
-            statsText += ', none matched your criteria';
+            statsText += ', none matched your criteria (score >= 3)';
             statsEl.textContent = statsText;
         }
 
@@ -1680,13 +1659,10 @@ export const UI = {
     /**
      * Update the People AI toggle checkbox state based on configuration.
      * Disables the checkbox if AI is not configured.
-     * Also updates the Full AI toggle visibility and state.
      */
     updatePeopleAIToggleState: function() {
         var aiCheck = document.getElementById('lisesca-people-ai-enabled');
         var aiLabel = aiCheck ? aiCheck.closest('.lisesca-checkbox-label') : null;
-        var fullAIRow = document.getElementById('lisesca-people-full-ai-row');
-        var fullAICheck = document.getElementById('lisesca-people-full-ai-enabled');
 
         if (!aiCheck || !aiLabel) {
             return;
@@ -1701,18 +1677,6 @@ export const UI = {
             aiLabel.classList.add('lisesca-disabled');
             aiCheck.checked = false;
             State.savePeopleAIEnabled(false);
-        }
-
-        if (fullAIRow && fullAICheck) {
-            if (isConfigured && aiCheck.checked) {
-                fullAIRow.style.display = 'flex';
-                fullAICheck.disabled = false;
-            } else {
-                fullAIRow.style.display = 'none';
-                fullAICheck.checked = false;
-                fullAICheck.disabled = true;
-                State.savePeopleFullAIEnabled(false);
-            }
         }
     },
 

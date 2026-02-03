@@ -28,27 +28,12 @@ export const Output = {
         lines.push('Location: ' + (profile.location || '(none)'));
         lines.push('Full profile URL: ' + (profile.profileUrl || '(none)'));
 
-        if (profile.profileAbout) {
+        if (profile.aiScore !== undefined) {
             lines.push('');
-            lines.push('## About');
-            lines.push('');
-            lines.push(profile.profileAbout);
-        }
-
-        if (profile.currentRole) {
-            lines.push('');
-            lines.push('## Current Role');
-            lines.push('');
-            lines.push(this.formatRoleDetails(profile.currentRole));
-        }
-
-        if (profile.pastRoles && profile.pastRoles.length > 0) {
-            lines.push('');
-            lines.push('## Past Roles');
-            lines.push('');
-            profile.pastRoles.forEach(function(role, index) {
-                lines.push((index + 1) + '. ' + Output.formatRoleDetails(role));
-            });
+            lines.push('**AI Score:** ' + profile.aiScore + '/5 (' + (profile.aiLabel || '') + ')');
+            if (profile.aiReason) {
+                lines.push('**AI Reason:** ' + profile.aiReason);
+            }
         }
 
         return lines.join('\n');
@@ -81,122 +66,27 @@ export const Output = {
         return blocks.join('\n\n---\n\n') + '\n';
     },
 
-    COLUMN_HEADERS_BASIC: ['Name', 'Title/Description', 'Location', 'LinkedIn URL', 'Connection degree'],
-    COLUMN_HEADERS_DEEP: [
-        'Name', 'Headline', 'Location', 'LinkedIn URL', 'Connection degree',
-        'About',
-        'Current Title', 'Current Company', 'Current Description', 'Current Location', 'Current Duration',
-        'Past Role 1', 'Past Role 2', 'Past Role 3'
-    ],
+    COLUMN_HEADERS: ['Name', 'Title/Description', 'Location', 'LinkedIn URL', 'Connection degree',
+        'AI Score', 'AI Rating', 'AI Reason'],
 
     /**
      * Convert a profile object into a row array.
      * @param {Object} profile - A profile data object.
      * @returns {Array<string|number>} Array of cell values.
      */
-    profileToRow: function(profile, useDeep) {
-        if (!useDeep) {
-            return [
-                profile.fullName || '',
-                profile.description || '',
-                profile.location || '',
-                profile.profileUrl || '',
-                profile.connectionDegree || 0
-            ];
-        }
-
-        var currentRole = profile.currentRole || {};
-        var pastRoles = profile.pastRoles || [];
-
+    profileToRow: function(profile) {
         return [
             profile.fullName || '',
-            profile.headline || profile.description || '',
+            profile.description || '',
             profile.location || '',
             profile.profileUrl || '',
             profile.connectionDegree || 0,
-            profile.profileAbout || '',
-            currentRole.title || '',
-            currentRole.company || '',
-            currentRole.description || '',
-            currentRole.location || '',
-            currentRole.duration || '',
-            this.formatRoleSummary(pastRoles[0]),
-            this.formatRoleSummary(pastRoles[1]),
-            this.formatRoleSummary(pastRoles[2])
+            profile.aiScore !== undefined ? profile.aiScore : '',
+            profile.aiLabel || '',
+            profile.aiReason || ''
         ];
     },
 
-    /**
-     * Check if any profiles include deep data.
-     * @param {Array} profiles - Array of profile data objects.
-     * @returns {boolean}
-     */
-    hasDeepData: function(profiles) {
-        if (!profiles || profiles.length === 0) {
-            return false;
-        }
-        return profiles.some(function(profile) {
-            return !!(profile && (profile.currentRole || (profile.pastRoles && profile.pastRoles.length > 0)));
-        });
-    },
-
-    /**
-     * Format a role into a single-line summary.
-     * @param {Object} role - Role data.
-     * @returns {string}
-     */
-    formatRoleSummary: function(role) {
-        if (!role) {
-            return '';
-        }
-        var parts = [];
-        if (role.title) {
-            parts.push(role.title);
-        }
-        if (role.company) {
-            parts.push('@ ' + role.company);
-        }
-        var suffix = [];
-        if (role.duration) {
-            suffix.push(role.duration);
-        }
-        if (role.location) {
-            suffix.push(role.location);
-        }
-        var line = parts.join(' ');
-        if (suffix.length > 0) {
-            line += ' (' + suffix.join(', ') + ')';
-        }
-        return line;
-    },
-
-    /**
-     * Format a role with full details for Markdown.
-     * @param {Object} role - Role data.
-     * @returns {string}
-     */
-    formatRoleDetails: function(role) {
-        if (!role) {
-            return '(no details)';
-        }
-        var lines = [];
-        if (role.title) {
-            lines.push('Title: ' + role.title);
-        }
-        if (role.company) {
-            lines.push('Company: ' + role.company);
-        }
-        if (role.duration) {
-            lines.push('Duration: ' + role.duration);
-        }
-        if (role.location) {
-            lines.push('Location: ' + role.location);
-        }
-        if (role.description) {
-            lines.push('Description: ' + role.description);
-        }
-        return lines.join('\n');
-    },
 
     /**
      * Escape a value for CSV output (RFC 4180).
@@ -217,15 +107,13 @@ export const Output = {
         var self = this;
         var lines = [];
 
-        var useDeep = this.hasDeepData(profiles);
-        var headers = useDeep ? this.COLUMN_HEADERS_DEEP : this.COLUMN_HEADERS_BASIC;
-        var headerLine = headers.map(function(header) {
+        var headerLine = this.COLUMN_HEADERS.map(function(header) {
             return self.escapeCSVField(header);
         }).join(',');
         lines.push(headerLine);
 
         profiles.forEach(function(profile) {
-            var row = self.profileToRow(profile, useDeep);
+            var row = self.profileToRow(profile);
             var csvLine = row.map(function(cell) {
                 return self.escapeCSVField(cell);
             }).join(',');
@@ -242,11 +130,9 @@ export const Output = {
      */
     generateXLSX: function(profiles) {
         var self = this;
-        var useDeep = this.hasDeepData(profiles);
-        var headers = useDeep ? this.COLUMN_HEADERS_DEEP : this.COLUMN_HEADERS_BASIC;
-        var data = [headers];
+        var data = [this.COLUMN_HEADERS];
         profiles.forEach(function(profile) {
-            data.push(self.profileToRow(profile, useDeep));
+            data.push(self.profileToRow(profile));
         });
 
         var worksheet = XLSX.utils.aoa_to_sheet(data);
@@ -259,19 +145,20 @@ export const Output = {
 
     /**
      * Generate a filename based on the current date and time.
+     * Format: YYYY-MM-DD_HH_MM_PEOPLE_LinkedIn.[extension]
      * @param {string} extension - File extension (default: 'md').
      * @returns {string} The generated filename.
      */
     buildFilename: function(extension) {
         var ext = extension || 'md';
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        return 'linkedin-search-' + year + '-' + month + '-' + day
-            + '-' + hours + 'h' + minutes + '.' + ext;
+        var now = new Date();
+        var year = now.getFullYear();
+        var month = String(now.getMonth() + 1).padStart(2, '0');
+        var day = String(now.getDate()).padStart(2, '0');
+        var hours = String(now.getHours()).padStart(2, '0');
+        var minutes = String(now.getMinutes()).padStart(2, '0');
+        return year + '-' + month + '-' + day + '_' + hours + '_' + minutes
+            + '_PEOPLE_LinkedIn.' + ext;
     },
 
     /**

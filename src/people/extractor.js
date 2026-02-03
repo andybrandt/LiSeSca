@@ -10,10 +10,10 @@ export const Extractor = {
      * Wait for search result cards to appear in the DOM.
      * LinkedIn is an SPA and may load results asynchronously,
      * so we poll for up to 10 seconds before giving up.
-     * @returns {Promise<NodeList>} The list of result card elements.
+     * @returns {Promise<NodeList>} The list of result card elements (may be empty).
      */
     waitForResults: function() {
-        return new Promise(function(resolve, reject) {
+        return new Promise(function(resolve) {
             const maxWaitMs = 10000;
             const pollIntervalMs = 500;
             let elapsed = 0;
@@ -29,8 +29,8 @@ export const Extractor = {
                 elapsed += pollIntervalMs;
                 if (elapsed >= maxWaitMs) {
                     clearInterval(poll);
-                    console.warn('[LiSeSca] No result cards found after ' + maxWaitMs + 'ms.');
-                    reject(new Error('No search result cards found on this page.'));
+                    console.log('[LiSeSca] No result cards found after ' + maxWaitMs + 'ms (end of results).');
+                    resolve([]); // Return empty array instead of rejecting
                 }
             }, pollIntervalMs);
         });

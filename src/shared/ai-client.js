@@ -35,28 +35,19 @@ ALWAYS provide a reason for your decision, especially for rejections. Be specifi
 
 You will receive the user's criteria first, then job cards one at a time.`;
 
-/** System prompt for people card triage (reject/keep/maybe) */
-const PEOPLE_TRIAGE_SYSTEM_PROMPT = `You are a LinkedIn profile filter. Evaluate each profile card against the criteria below.
+/** System prompt for people scoring (0-5 scale) */
+const PEOPLE_SCORE_SYSTEM_PROMPT = `You are a LinkedIn profile scorer. Rate each profile on a 0-5 scale based on the criteria below.
 
-You only see LIMITED info: name, headline, location, connection degree. Use the people_card_triage tool:
-- "reject" — CLEARLY irrelevant per criteria (wrong role type, excluded category)
-- "keep" — CLEARLY matches criteria
-- "maybe" — Uncertain from card alone, need full profile
+You only see LIMITED info: name, headline, location, connection degree. Use the people_score tool with:
+- 0 = Irrelevant (clearly doesn't match criteria)
+- 1 = Low interest (unlikely to be useful)
+- 2 = Some interest (slight potential)
+- 3 = Moderate interest (could be valuable)
+- 4 = Good match (likely valuable)
+- 5 = Strong match (excellent fit for criteria)
 
-Be conservative with "reject" — only use when clearly irrelevant. When uncertain, use "maybe".
-Always provide a brief reason.
-
-USER'S CRITERIA:
-`;
-
-/** System prompt for full profile evaluation (accept/reject) */
-const PEOPLE_PROFILE_SYSTEM_PROMPT = `You are a LinkedIn profile filter. Evaluate the full profile against the criteria below.
-
-You have FULL profile data: current role, past roles, company, experience. Use the people_full_evaluation tool:
-- "accept" — Person matches criteria (has value for user's goals)
-- "reject" — Person doesn't fit OR hits exclusion criteria
-
-When borderline, lean toward "accept". Always provide a specific reason.
+When uncertain, lean toward higher scores — false positives are easy to filter, false negatives lose opportunities.
+Always provide a brief reason for your score.
 
 USER'S CRITERIA:
 `;
@@ -118,44 +109,25 @@ const FULL_EVALUATION_TOOL = {
     }
 };
 
-/** Tool for people triage (reject/keep/maybe) */
-const PEOPLE_CARD_TRIAGE_TOOL = {
-    name: 'people_card_triage',
-    description: 'Triage a person card based on limited information (name, headline, location)',
+/** Tool for people scoring (0-5 scale) */
+const PEOPLE_SCORE_TOOL = {
+    name: 'people_score',
+    description: 'Rate a LinkedIn profile based on limited card information',
     input_schema: {
         type: 'object',
         properties: {
-            decision: {
-                type: 'string',
-                enum: ['reject', 'keep', 'maybe'],
-                description: 'reject=clearly irrelevant, keep=clearly relevant, maybe=need full profile'
+            score: {
+                type: 'integer',
+                minimum: 0,
+                maximum: 5,
+                description: '0=irrelevant, 1=low interest, 2=some interest, 3=moderate, 4=good match, 5=strong match'
             },
             reason: {
                 type: 'string',
-                description: 'Brief explanation for the decision'
+                description: 'Brief explanation for the score'
             }
         },
-        required: ['decision', 'reason']
-    }
-};
-
-/** Tool for final decision after full profile review */
-const PEOPLE_FULL_EVALUATION_TOOL = {
-    name: 'people_full_evaluation',
-    description: 'Final decision after reviewing full profile details',
-    input_schema: {
-        type: 'object',
-        properties: {
-            accept: {
-                type: 'boolean',
-                description: 'true to accept and save the person, false to reject'
-            },
-            reason: {
-                type: 'string',
-                description: 'Brief explanation for the decision'
-            }
-        },
-        required: ['accept', 'reason']
+        required: ['score', 'reason']
     }
 };
 
@@ -174,9 +146,6 @@ export const AIClient = {
 
     /** Flag indicating if the people conversation has been initialized */
     peopleInitialized: false,
-
-    /** Flag indicating if full AI mode is active for people evaluation */
-    peopleFullAIMode: false,
 
     /**
      * Check if the AI client is properly configured with API key and criteria.
@@ -294,15 +263,13 @@ export const AIClient = {
 
     /**
      * Initialize the people AI conversation.
-     * @param {boolean} fullAIMode - If true, enables full AI mode (two-stage).
      * @returns {Promise<void>}
      */
-    initPeopleConversation: function(fullAIMode) {
+    initPeopleConversation: function() {
         if (this.peopleInitialized) {
             return Promise.resolve();
         }
 
-        this.peopleFullAIMode = fullAIMode === true;
         // Conversation history starts empty; criteria is in system prompt
         this.peopleConversationHistory = [];
 
@@ -724,32 +691,49 @@ export const AIClient = {
     // ===== PEOPLE AI MODE =====
 
     /**
-     * Triage a person card using three-tier evaluation (reject/keep/maybe).
+     * Score a person card on a 0-5 scale.
      * @param {string} cardMarkdown - The person card formatted as Markdown.
-     * @returns {Promise<{decision: string, reason: string}>}
+     * @returns {Promise<{score: number, label: string, reason: string}>}
      */
-    triagePeopleCard: function(cardMarkdown) {
+    scorePeopleCard: function(cardMarkdown) {
         var self = this;
 
         if (!this.isPeopleConfigured()) {
-            console.warn('[LiSeSca] People AI not configured, returning "keep".');
-            return Promise.resolve({ decision: 'keep', reason: 'AI not configured' });
+            console.warn('[LiSeSca] People AI not configured, returning score 3.');
+            return Promise.resolve({ score: 3, label: 'Moderate interest', reason: 'AI not configured' });
         }
 
-        return this.initPeopleConversation(true).then(function() {
-            return self.sendPeopleCardForTriage(cardMarkdown);
+        return this.initPeopleConversation().then(function() {
+            return self.sendPeopleCardForScoring(cardMarkdown);
         }).catch(function(error) {
-            console.error('[LiSeSca] People AI triage error, returning "keep":', error);
-            return { decision: 'keep', reason: 'Error: ' + error.message };
+            console.error('[LiSeSca] People AI scoring error, returning score 3:', error);
+            return { score: 3, label: 'Moderate interest', reason: 'Error: ' + error.message };
         });
     },
 
     /**
-     * Send a person card to Claude for triage.
-     * @param {string} cardMarkdown - The person card formatted as Markdown.
-     * @returns {Promise<{decision: string, reason: string}>}
+     * Convert a numeric score to a label.
+     * @param {number} score - The score (0-5).
+     * @returns {string} The label.
      */
-    sendPeopleCardForTriage: function(cardMarkdown) {
+    scoreToLabel: function(score) {
+        var labels = {
+            0: 'Irrelevant',
+            1: 'Low interest',
+            2: 'Some interest',
+            3: 'Moderate interest',
+            4: 'Good match',
+            5: 'Strong match'
+        };
+        return labels[score] || 'Unknown';
+    },
+
+    /**
+     * Send a person card to Claude for scoring.
+     * @param {string} cardMarkdown - The person card formatted as Markdown.
+     * @returns {Promise<{score: number, label: string, reason: string}>}
+     */
+    sendPeopleCardForScoring: function(cardMarkdown) {
         var self = this;
 
         // Criteria is in the system prompt, conversation history has prior cards
@@ -760,9 +744,9 @@ export const AIClient = {
         var requestBody = {
             model: 'claude-sonnet-4-5-20250929',
             max_tokens: 200,
-            system: PEOPLE_TRIAGE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
-            tools: [PEOPLE_CARD_TRIAGE_TOOL],
-            tool_choice: { type: 'tool', name: 'people_card_triage' },
+            system: PEOPLE_SCORE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
+            tools: [PEOPLE_SCORE_TOOL],
+            tool_choice: { type: 'tool', name: 'people_score' },
             messages: messagesWithCard
         };
 
@@ -777,14 +761,14 @@ export const AIClient = {
                 },
                 data: JSON.stringify(requestBody),
                 onload: function(response) {
-                    self.handlePeopleTriageResponse(response, cardMarkdown, resolve, reject);
+                    self.handlePeopleScoreResponse(response, cardMarkdown, resolve, reject);
                 },
                 onerror: function(error) {
-                    console.error('[LiSeSca] People AI triage request failed:', error);
+                    console.error('[LiSeSca] People AI scoring request failed:', error);
                     reject(new Error('Network error'));
                 },
                 ontimeout: function() {
-                    console.error('[LiSeSca] People AI triage request timed out');
+                    console.error('[LiSeSca] People AI scoring request timed out');
                     reject(new Error('Request timeout'));
                 },
                 timeout: 30000
@@ -793,16 +777,18 @@ export const AIClient = {
     },
 
     /**
-     * Handle the people triage API response and extract the decision.
+     * Handle the people scoring API response and extract the score.
      * @param {Object} response - The GM_xmlhttpRequest response object.
      * @param {string} cardMarkdown - The original person card.
      * @param {Function} resolve - Promise resolve function.
      * @param {Function} reject - Promise reject function.
      */
-    handlePeopleTriageResponse: function(response, cardMarkdown, resolve, reject) {
+    handlePeopleScoreResponse: function(response, cardMarkdown, resolve, reject) {
+        var self = this;
+
         if (response.status !== 200) {
-            console.error('[LiSeSca] People AI triage API error:', response.status, response.responseText);
-            resolve({ decision: 'keep', reason: 'API error ' + response.status });
+            console.error('[LiSeSca] People AI scoring API error:', response.status, response.responseText);
+            resolve({ score: 3, label: 'Moderate interest', reason: 'API error ' + response.status });
             return;
         }
 
@@ -818,20 +804,23 @@ export const AIClient = {
                 }
             }
 
-            if (!toolUse || toolUse.name !== 'people_card_triage') {
-                console.warn('[LiSeSca] Unexpected people triage response format, returning "keep".');
-                resolve({ decision: 'keep', reason: 'Unexpected response format' });
+            if (!toolUse || toolUse.name !== 'people_score') {
+                console.warn('[LiSeSca] Unexpected people scoring response format, returning score 3.');
+                resolve({ score: 3, label: 'Moderate interest', reason: 'Unexpected response format' });
                 return;
             }
 
-            var decision = toolUse.input.decision;
+            var score = toolUse.input.score;
             var reason = toolUse.input.reason || '(no reason provided)';
 
-            if (decision !== 'reject' && decision !== 'keep' && decision !== 'maybe') {
-                console.warn('[LiSeSca] Invalid people triage decision "' + decision + '", returning "keep".');
-                decision = 'keep';
-                reason = 'Invalid decision value: ' + decision;
+            // Validate score is in range
+            if (typeof score !== 'number' || score < 0 || score > 5) {
+                console.warn('[LiSeSca] Invalid people score "' + score + '", returning 3.');
+                score = 3;
+                reason = 'Invalid score value: ' + score;
             }
+
+            var label = self.scoreToLabel(score);
 
             // Update conversation history
             this.peopleConversationHistory.push({ role: 'user', content: cardMarkdown });
@@ -840,14 +829,7 @@ export const AIClient = {
                 content: [toolUse]
             });
 
-            var resultMessage = '';
-            if (decision === 'reject') {
-                resultMessage = 'Person rejected and skipped.';
-            } else if (decision === 'keep') {
-                resultMessage = 'Person accepted. Fetching full profile for output.';
-            } else {
-                resultMessage = 'Need more information. Full profile will follow.';
-            }
+            var resultMessage = score >= 3 ? 'Person scored ' + score + '/5, saved.' : 'Person scored ' + score + '/5, skipped.';
 
             this.peopleConversationHistory.push({
                 role: 'user',
@@ -860,138 +842,10 @@ export const AIClient = {
                 ]
             });
 
-            resolve({ decision: decision, reason: reason });
+            resolve({ score: score, label: label, reason: reason });
         } catch (error) {
-            console.error('[LiSeSca] Failed to parse people triage response:', error);
-            resolve({ decision: 'keep', reason: 'Parse error: ' + error.message });
-        }
-    },
-
-    /**
-     * Evaluate a full profile after a "maybe" triage decision.
-     * @param {string} fullProfileMarkdown - The complete profile formatted as Markdown.
-     * @returns {Promise<{accept: boolean, reason: string}>}
-     */
-    evaluateFullProfile: function(fullProfileMarkdown) {
-        var self = this;
-
-        if (!this.isPeopleConfigured()) {
-            console.warn('[LiSeSca] People AI not configured, accepting profile.');
-            return Promise.resolve({ accept: true, reason: 'AI not configured' });
-        }
-
-        // Full profile evaluation is self-contained (criteria + profile in one call)
-        return this.sendFullProfileForEvaluation(fullProfileMarkdown).catch(function(error) {
-            console.error('[LiSeSca] People AI full evaluation error, accepting profile:', error);
-            return { accept: true, reason: 'Error: ' + error.message };
-        });
-    },
-
-    /**
-     * Send full profile details to Claude for final evaluation.
-     * @param {string} fullProfileMarkdown - The complete profile formatted as Markdown.
-     * @returns {Promise<{accept: boolean, reason: string}>}
-     */
-    sendFullProfileForEvaluation: function(fullProfileMarkdown) {
-        var self = this;
-
-        // Criteria is in the system prompt, just send the profile data
-        var messages = [
-            { role: 'user', content: fullProfileMarkdown }
-        ];
-
-        var requestBody = {
-            model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 300,
-            system: PEOPLE_PROFILE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
-            tools: [PEOPLE_FULL_EVALUATION_TOOL],
-            tool_choice: { type: 'tool', name: 'people_full_evaluation' },
-            messages: messages
-        };
-
-        return new Promise(function(resolve, reject) {
-            GM_xmlhttpRequest({
-                method: 'POST',
-                url: 'https://api.anthropic.com/v1/messages',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                    'anthropic-version': '2023-06-01'
-                },
-                data: JSON.stringify(requestBody),
-                onload: function(response) {
-                    self.handlePeopleFullEvaluationResponse(response, fullProfileMarkdown, resolve, reject);
-                },
-                onerror: function(error) {
-                    console.error('[LiSeSca] People AI full evaluation request failed:', error);
-                    reject(new Error('Network error'));
-                },
-                ontimeout: function() {
-                    console.error('[LiSeSca] People AI full evaluation request timed out');
-                    reject(new Error('Request timeout'));
-                },
-                timeout: 60000
-            });
-        });
-    },
-
-    /**
-     * Handle the full profile evaluation response.
-     * @param {Object} response - The GM_xmlhttpRequest response object.
-     * @param {string} profileMarkdown - The profile markdown sent for evaluation.
-     * @param {Function} resolve - Promise resolve function.
-     * @param {Function} reject - Promise reject function.
-     */
-    handlePeopleFullEvaluationResponse: function(response, profileMarkdown, resolve, reject) {
-        if (response.status !== 200) {
-            console.error('[LiSeSca] People AI full evaluation API error:', response.status, response.responseText);
-            resolve({ accept: true, reason: 'API error ' + response.status });
-            return;
-        }
-
-        try {
-            var data = JSON.parse(response.responseText);
-            var toolUse = null;
-            if (data.content && Array.isArray(data.content)) {
-                for (var i = 0; i < data.content.length; i++) {
-                    if (data.content[i].type === 'tool_use') {
-                        toolUse = data.content[i];
-                        break;
-                    }
-                }
-            }
-
-            if (!toolUse || toolUse.name !== 'people_full_evaluation') {
-                console.warn('[LiSeSca] Unexpected people full evaluation response, accepting profile.');
-                resolve({ accept: true, reason: 'Unexpected response format' });
-                return;
-            }
-
-            var accept = toolUse.input.accept === true;
-            var reason = toolUse.input.reason || '(no reason provided)';
-
-            // Update conversation history (not really used for full profile, but keeping for consistency)
-            this.peopleConversationHistory.push({ role: 'user', content: profileMarkdown });
-            this.peopleConversationHistory.push({
-                role: 'assistant',
-                content: [toolUse]
-            });
-            this.peopleConversationHistory.push({
-                role: 'user',
-                content: [
-                    {
-                        type: 'tool_result',
-                        tool_use_id: toolUse.id,
-                        content: accept ? 'Person accepted and saved.' : 'Person rejected after full review.'
-                    }
-                ]
-            });
-
-            resolve({ accept: accept, reason: reason });
-
-        } catch (error) {
-            console.error('[LiSeSca] Failed to parse people full evaluation response:', error);
-            resolve({ accept: true, reason: 'Parse error: ' + error.message });
+            console.error('[LiSeSca] Failed to parse people scoring response:', error);
+            resolve({ score: 3, label: 'Moderate interest', reason: 'Parse error: ' + error.message });
         }
     }
 };

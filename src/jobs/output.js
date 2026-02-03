@@ -171,6 +171,7 @@ export const JobOutput = {
 
     /**
      * Generate a job-specific filename.
+     * Format: YYYY-MM-DD_HH_MM_JOBS_LinkedIn.[extension]
      * @param {string} extension - File extension.
      * @returns {string} The generated filename.
      */
@@ -182,8 +183,8 @@ export const JobOutput = {
         var day = String(now.getDate()).padStart(2, '0');
         var hours = String(now.getHours()).padStart(2, '0');
         var minutes = String(now.getMinutes()).padStart(2, '0');
-        return 'linkedin-jobs-' + year + '-' + month + '-' + day
-            + '-' + hours + 'h' + minutes + '.' + ext;
+        return year + '-' + month + '-' + day + '_' + hours + '_' + minutes
+            + '_JOBS_LinkedIn.' + ext;
     },
 
     /**

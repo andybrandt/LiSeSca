@@ -27,7 +27,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.4.0',
+        VERSION: '0.3.16',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -167,8 +167,7 @@
             INCLUDE_VIEWED: 'lisesca_includeViewed',
             AI_ENABLED: 'lisesca_aiEnabled',          // AI job filtering toggle
             FULL_AI_ENABLED: 'lisesca_fullAIEnabled', // Full AI evaluation toggle (three-tier)
-            PEOPLE_AI_ENABLED: 'lisesca_peopleAIEnabled',          // AI people filtering toggle
-            PEOPLE_FULL_AI_ENABLED: 'lisesca_peopleFullAIEnabled', // Full AI evaluation toggle for people
+            PEOPLE_AI_ENABLED: 'lisesca_peopleAIEnabled',          // AI people scoring toggle
             // Job-specific state keys
             SCRAPE_MODE: 'lisesca_scrapeMode',       // 'people' or 'jobs'
             JOB_INDEX: 'lisesca_jobIndex',            // current job index on page (0-based)
@@ -178,12 +177,7 @@
             AI_JOBS_EVALUATED: 'lisesca_aiJobsEvaluated',  // count of jobs evaluated by AI
             AI_JOBS_ACCEPTED: 'lisesca_aiJobsAccepted',    // count of jobs accepted by AI
             AI_PEOPLE_EVALUATED: 'lisesca_aiPeopleEvaluated', // count of people evaluated by AI
-            AI_PEOPLE_ACCEPTED: 'lisesca_aiPeopleAccepted',   // count of people accepted by AI
-            // People deep-scrape state keys
-            CURRENT_PROFILE_URL: 'lisesca_currentProfileUrl',
-            DEEP_SCRAPE_MODE: 'lisesca_deepScrapeMode',   // 'normal' or 'deep'
-            PROFILE_INDEX: 'lisesca_profileIndex',        // current profile index on page (0-based)
-            PROFILES_ON_PAGE: 'lisesca_profilesOnPage'    // JSON array of profiles for current page
+            AI_PEOPLE_ACCEPTED: 'lisesca_aiPeopleAccepted'    // count of people accepted by AI
         },
 
         /**
@@ -237,11 +231,7 @@
                 includeViewed: this.getIncludeViewed(),
                 scrapeMode: this.getScrapeMode(),
                 jobIndex: this.get(this.KEYS.JOB_INDEX, 0),
-                jobIdsOnPage: this.getJobIdsOnPage(),
-                profileIndex: this.get(this.KEYS.PROFILE_INDEX, 0),
-                profilesOnPage: this.getProfilesOnPage(),
-                currentProfileUrl: this.get(this.KEYS.CURRENT_PROFILE_URL, ''),
-                deepScrapeMode: this.get(this.KEYS.DEEP_SCRAPE_MODE, 'normal')
+                jobIdsOnPage: this.getJobIdsOnPage()
             };
         },
 
@@ -269,11 +259,6 @@
             this.set(this.KEYS.AI_JOBS_ACCEPTED, 0);
             this.set(this.KEYS.AI_PEOPLE_EVALUATED, 0);
             this.set(this.KEYS.AI_PEOPLE_ACCEPTED, 0);
-            // Reset people deep-scrape state
-            this.set(this.KEYS.CURRENT_PROFILE_URL, '');
-            this.set(this.KEYS.DEEP_SCRAPE_MODE, 'normal');
-            this.set(this.KEYS.PROFILE_INDEX, 0);
-            this.set(this.KEYS.PROFILES_ON_PAGE, JSON.stringify([]));
             console.log('[LiSeSca] Session started: mode=' + (scrapeMode || 'people')
                 + ', pages=' + targetPageCount + ', startPage=' + startPage);
         },
@@ -392,35 +377,6 @@
          */
         getPeopleAIEnabled: function() {
             return this.get(this.KEYS.PEOPLE_AI_ENABLED, false);
-        },
-
-        /**
-         * Read the "Full AI evaluation" preference from the UI checkbox (people).
-         * @returns {boolean} True if full AI evaluation is enabled for people.
-         */
-        readPeopleFullAIEnabledFromUI: function() {
-            var fullAICheck = document.getElementById('lisesca-people-full-ai-enabled');
-            if (!fullAICheck) {
-                return false;
-            }
-            return fullAICheck.checked;
-        },
-
-        /**
-         * Save the "Full AI evaluation" preference to persistent storage (people).
-         * @param {boolean} fullAIEnabled - True to enable full AI evaluation for people.
-         */
-        savePeopleFullAIEnabled: function(fullAIEnabled) {
-            this.set(this.KEYS.PEOPLE_FULL_AI_ENABLED, fullAIEnabled === true);
-        },
-
-        /**
-         * Retrieve the saved "Full AI evaluation" preference for people.
-         * Defaults to false if not set.
-         * @returns {boolean}
-         */
-        getPeopleFullAIEnabled: function() {
-            return this.get(this.KEYS.PEOPLE_FULL_AI_ENABLED, false);
         },
 
         /**
@@ -574,20 +530,6 @@
         },
 
         /**
-         * Get the stored profiles for the current page (deep scrape).
-         * @returns {Array<Object>} Array of profile objects.
-         */
-        getProfilesOnPage: function() {
-            var raw = this.get(this.KEYS.PROFILES_ON_PAGE, '[]');
-            try {
-                return JSON.parse(raw);
-            } catch (error) {
-                console.warn('[LiSeSca] Failed to parse profiles on page, resetting:', error);
-                return [];
-            }
-        },
-
-        /**
          * Advance to the next page number.
          */
         advancePage: function() {
@@ -614,10 +556,6 @@
             GM_deleteValue(this.KEYS.AI_JOBS_ACCEPTED);
             GM_deleteValue(this.KEYS.AI_PEOPLE_EVALUATED);
             GM_deleteValue(this.KEYS.AI_PEOPLE_ACCEPTED);
-            GM_deleteValue(this.KEYS.CURRENT_PROFILE_URL);
-            GM_deleteValue(this.KEYS.DEEP_SCRAPE_MODE);
-            GM_deleteValue(this.KEYS.PROFILE_INDEX);
-            GM_deleteValue(this.KEYS.PROFILES_ON_PAGE);
             console.log('[LiSeSca] Session state cleared.');
         }
     };
@@ -794,28 +732,19 @@ ALWAYS provide a reason for your decision, especially for rejections. Be specifi
 
 You will receive the user's criteria first, then job cards one at a time.`;
 
-    /** System prompt for people card triage (reject/keep/maybe) */
-    const PEOPLE_TRIAGE_SYSTEM_PROMPT = `You are a LinkedIn profile filter. Evaluate each profile card against the criteria below.
+    /** System prompt for people scoring (0-5 scale) */
+    const PEOPLE_SCORE_SYSTEM_PROMPT = `You are a LinkedIn profile scorer. Rate each profile on a 0-5 scale based on the criteria below.
 
-You only see LIMITED info: name, headline, location, connection degree. Use the people_card_triage tool:
-- "reject" — CLEARLY irrelevant per criteria (wrong role type, excluded category)
-- "keep" — CLEARLY matches criteria
-- "maybe" — Uncertain from card alone, need full profile
+You only see LIMITED info: name, headline, location, connection degree. Use the people_score tool with:
+- 0 = Irrelevant (clearly doesn't match criteria)
+- 1 = Low interest (unlikely to be useful)
+- 2 = Some interest (slight potential)
+- 3 = Moderate interest (could be valuable)
+- 4 = Good match (likely valuable)
+- 5 = Strong match (excellent fit for criteria)
 
-Be conservative with "reject" — only use when clearly irrelevant. When uncertain, use "maybe".
-Always provide a brief reason.
-
-USER'S CRITERIA:
-`;
-
-    /** System prompt for full profile evaluation (accept/reject) */
-    const PEOPLE_PROFILE_SYSTEM_PROMPT = `You are a LinkedIn profile filter. Evaluate the full profile against the criteria below.
-
-You have FULL profile data: current role, past roles, company, experience. Use the people_full_evaluation tool:
-- "accept" — Person matches criteria (has value for user's goals)
-- "reject" — Person doesn't fit OR hits exclusion criteria
-
-When borderline, lean toward "accept". Always provide a specific reason.
+When uncertain, lean toward higher scores — false positives are easy to filter, false negatives lose opportunities.
+Always provide a brief reason for your score.
 
 USER'S CRITERIA:
 `;
@@ -877,44 +806,25 @@ USER'S CRITERIA:
         }
     };
 
-    /** Tool for people triage (reject/keep/maybe) */
-    const PEOPLE_CARD_TRIAGE_TOOL = {
-        name: 'people_card_triage',
-        description: 'Triage a person card based on limited information (name, headline, location)',
+    /** Tool for people scoring (0-5 scale) */
+    const PEOPLE_SCORE_TOOL = {
+        name: 'people_score',
+        description: 'Rate a LinkedIn profile based on limited card information',
         input_schema: {
             type: 'object',
             properties: {
-                decision: {
-                    type: 'string',
-                    enum: ['reject', 'keep', 'maybe'],
-                    description: 'reject=clearly irrelevant, keep=clearly relevant, maybe=need full profile'
+                score: {
+                    type: 'integer',
+                    minimum: 0,
+                    maximum: 5,
+                    description: '0=irrelevant, 1=low interest, 2=some interest, 3=moderate, 4=good match, 5=strong match'
                 },
                 reason: {
                     type: 'string',
-                    description: 'Brief explanation for the decision'
+                    description: 'Brief explanation for the score'
                 }
             },
-            required: ['decision', 'reason']
-        }
-    };
-
-    /** Tool for final decision after full profile review */
-    const PEOPLE_FULL_EVALUATION_TOOL = {
-        name: 'people_full_evaluation',
-        description: 'Final decision after reviewing full profile details',
-        input_schema: {
-            type: 'object',
-            properties: {
-                accept: {
-                    type: 'boolean',
-                    description: 'true to accept and save the person, false to reject'
-                },
-                reason: {
-                    type: 'string',
-                    description: 'Brief explanation for the decision'
-                }
-            },
-            required: ['accept', 'reason']
+            required: ['score', 'reason']
         }
     };
 
@@ -933,9 +843,6 @@ USER'S CRITERIA:
 
         /** Flag indicating if the people conversation has been initialized */
         peopleInitialized: false,
-
-        /** Flag indicating if full AI mode is active for people evaluation */
-        peopleFullAIMode: false,
 
         /**
          * Check if the AI client is properly configured with API key and criteria.
@@ -1053,15 +960,13 @@ USER'S CRITERIA:
 
         /**
          * Initialize the people AI conversation.
-         * @param {boolean} fullAIMode - If true, enables full AI mode (two-stage).
          * @returns {Promise<void>}
          */
-        initPeopleConversation: function(fullAIMode) {
+        initPeopleConversation: function() {
             if (this.peopleInitialized) {
                 return Promise.resolve();
             }
 
-            this.peopleFullAIMode = fullAIMode === true;
             // Conversation history starts empty; criteria is in system prompt
             this.peopleConversationHistory = [];
 
@@ -1482,32 +1387,49 @@ USER'S CRITERIA:
         // ===== PEOPLE AI MODE =====
 
         /**
-         * Triage a person card using three-tier evaluation (reject/keep/maybe).
+         * Score a person card on a 0-5 scale.
          * @param {string} cardMarkdown - The person card formatted as Markdown.
-         * @returns {Promise<{decision: string, reason: string}>}
+         * @returns {Promise<{score: number, label: string, reason: string}>}
          */
-        triagePeopleCard: function(cardMarkdown) {
+        scorePeopleCard: function(cardMarkdown) {
             var self = this;
 
             if (!this.isPeopleConfigured()) {
-                console.warn('[LiSeSca] People AI not configured, returning "keep".');
-                return Promise.resolve({ decision: 'keep', reason: 'AI not configured' });
+                console.warn('[LiSeSca] People AI not configured, returning score 3.');
+                return Promise.resolve({ score: 3, label: 'Moderate interest', reason: 'AI not configured' });
             }
 
-            return this.initPeopleConversation(true).then(function() {
-                return self.sendPeopleCardForTriage(cardMarkdown);
+            return this.initPeopleConversation().then(function() {
+                return self.sendPeopleCardForScoring(cardMarkdown);
             }).catch(function(error) {
-                console.error('[LiSeSca] People AI triage error, returning "keep":', error);
-                return { decision: 'keep', reason: 'Error: ' + error.message };
+                console.error('[LiSeSca] People AI scoring error, returning score 3:', error);
+                return { score: 3, label: 'Moderate interest', reason: 'Error: ' + error.message };
             });
         },
 
         /**
-         * Send a person card to Claude for triage.
-         * @param {string} cardMarkdown - The person card formatted as Markdown.
-         * @returns {Promise<{decision: string, reason: string}>}
+         * Convert a numeric score to a label.
+         * @param {number} score - The score (0-5).
+         * @returns {string} The label.
          */
-        sendPeopleCardForTriage: function(cardMarkdown) {
+        scoreToLabel: function(score) {
+            var labels = {
+                0: 'Irrelevant',
+                1: 'Low interest',
+                2: 'Some interest',
+                3: 'Moderate interest',
+                4: 'Good match',
+                5: 'Strong match'
+            };
+            return labels[score] || 'Unknown';
+        },
+
+        /**
+         * Send a person card to Claude for scoring.
+         * @param {string} cardMarkdown - The person card formatted as Markdown.
+         * @returns {Promise<{score: number, label: string, reason: string}>}
+         */
+        sendPeopleCardForScoring: function(cardMarkdown) {
             var self = this;
 
             // Criteria is in the system prompt, conversation history has prior cards
@@ -1518,9 +1440,9 @@ USER'S CRITERIA:
             var requestBody = {
                 model: 'claude-sonnet-4-5-20250929',
                 max_tokens: 200,
-                system: PEOPLE_TRIAGE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
-                tools: [PEOPLE_CARD_TRIAGE_TOOL],
-                tool_choice: { type: 'tool', name: 'people_card_triage' },
+                system: PEOPLE_SCORE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
+                tools: [PEOPLE_SCORE_TOOL],
+                tool_choice: { type: 'tool', name: 'people_score' },
                 messages: messagesWithCard
             };
 
@@ -1535,14 +1457,14 @@ USER'S CRITERIA:
                     },
                     data: JSON.stringify(requestBody),
                     onload: function(response) {
-                        self.handlePeopleTriageResponse(response, cardMarkdown, resolve, reject);
+                        self.handlePeopleScoreResponse(response, cardMarkdown, resolve, reject);
                     },
                     onerror: function(error) {
-                        console.error('[LiSeSca] People AI triage request failed:', error);
+                        console.error('[LiSeSca] People AI scoring request failed:', error);
                         reject(new Error('Network error'));
                     },
                     ontimeout: function() {
-                        console.error('[LiSeSca] People AI triage request timed out');
+                        console.error('[LiSeSca] People AI scoring request timed out');
                         reject(new Error('Request timeout'));
                     },
                     timeout: 30000
@@ -1551,16 +1473,18 @@ USER'S CRITERIA:
         },
 
         /**
-         * Handle the people triage API response and extract the decision.
+         * Handle the people scoring API response and extract the score.
          * @param {Object} response - The GM_xmlhttpRequest response object.
          * @param {string} cardMarkdown - The original person card.
          * @param {Function} resolve - Promise resolve function.
          * @param {Function} reject - Promise reject function.
          */
-        handlePeopleTriageResponse: function(response, cardMarkdown, resolve, reject) {
+        handlePeopleScoreResponse: function(response, cardMarkdown, resolve, reject) {
+            var self = this;
+
             if (response.status !== 200) {
-                console.error('[LiSeSca] People AI triage API error:', response.status, response.responseText);
-                resolve({ decision: 'keep', reason: 'API error ' + response.status });
+                console.error('[LiSeSca] People AI scoring API error:', response.status, response.responseText);
+                resolve({ score: 3, label: 'Moderate interest', reason: 'API error ' + response.status });
                 return;
             }
 
@@ -1576,20 +1500,23 @@ USER'S CRITERIA:
                     }
                 }
 
-                if (!toolUse || toolUse.name !== 'people_card_triage') {
-                    console.warn('[LiSeSca] Unexpected people triage response format, returning "keep".');
-                    resolve({ decision: 'keep', reason: 'Unexpected response format' });
+                if (!toolUse || toolUse.name !== 'people_score') {
+                    console.warn('[LiSeSca] Unexpected people scoring response format, returning score 3.');
+                    resolve({ score: 3, label: 'Moderate interest', reason: 'Unexpected response format' });
                     return;
                 }
 
-                var decision = toolUse.input.decision;
+                var score = toolUse.input.score;
                 var reason = toolUse.input.reason || '(no reason provided)';
 
-                if (decision !== 'reject' && decision !== 'keep' && decision !== 'maybe') {
-                    console.warn('[LiSeSca] Invalid people triage decision "' + decision + '", returning "keep".');
-                    decision = 'keep';
-                    reason = 'Invalid decision value: ' + decision;
+                // Validate score is in range
+                if (typeof score !== 'number' || score < 0 || score > 5) {
+                    console.warn('[LiSeSca] Invalid people score "' + score + '", returning 3.');
+                    score = 3;
+                    reason = 'Invalid score value: ' + score;
                 }
+
+                var label = self.scoreToLabel(score);
 
                 // Update conversation history
                 this.peopleConversationHistory.push({ role: 'user', content: cardMarkdown });
@@ -1598,14 +1525,7 @@ USER'S CRITERIA:
                     content: [toolUse]
                 });
 
-                var resultMessage = '';
-                if (decision === 'reject') {
-                    resultMessage = 'Person rejected and skipped.';
-                } else if (decision === 'keep') {
-                    resultMessage = 'Person accepted. Fetching full profile for output.';
-                } else {
-                    resultMessage = 'Need more information. Full profile will follow.';
-                }
+                var resultMessage = score >= 3 ? 'Person scored ' + score + '/5, saved.' : 'Person scored ' + score + '/5, skipped.';
 
                 this.peopleConversationHistory.push({
                     role: 'user',
@@ -1618,137 +1538,10 @@ USER'S CRITERIA:
                     ]
                 });
 
-                resolve({ decision: decision, reason: reason });
+                resolve({ score: score, label: label, reason: reason });
             } catch (error) {
-                console.error('[LiSeSca] Failed to parse people triage response:', error);
-                resolve({ decision: 'keep', reason: 'Parse error: ' + error.message });
-            }
-        },
-
-        /**
-         * Evaluate a full profile after a "maybe" triage decision.
-         * @param {string} fullProfileMarkdown - The complete profile formatted as Markdown.
-         * @returns {Promise<{accept: boolean, reason: string}>}
-         */
-        evaluateFullProfile: function(fullProfileMarkdown) {
-
-            if (!this.isPeopleConfigured()) {
-                console.warn('[LiSeSca] People AI not configured, accepting profile.');
-                return Promise.resolve({ accept: true, reason: 'AI not configured' });
-            }
-
-            // Full profile evaluation is self-contained (criteria + profile in one call)
-            return this.sendFullProfileForEvaluation(fullProfileMarkdown).catch(function(error) {
-                console.error('[LiSeSca] People AI full evaluation error, accepting profile:', error);
-                return { accept: true, reason: 'Error: ' + error.message };
-            });
-        },
-
-        /**
-         * Send full profile details to Claude for final evaluation.
-         * @param {string} fullProfileMarkdown - The complete profile formatted as Markdown.
-         * @returns {Promise<{accept: boolean, reason: string}>}
-         */
-        sendFullProfileForEvaluation: function(fullProfileMarkdown) {
-            var self = this;
-
-            // Criteria is in the system prompt, just send the profile data
-            var messages = [
-                { role: 'user', content: fullProfileMarkdown }
-            ];
-
-            var requestBody = {
-                model: 'claude-sonnet-4-5-20250929',
-                max_tokens: 300,
-                system: PEOPLE_PROFILE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
-                tools: [PEOPLE_FULL_EVALUATION_TOOL],
-                tool_choice: { type: 'tool', name: 'people_full_evaluation' },
-                messages: messages
-            };
-
-            return new Promise(function(resolve, reject) {
-                GM_xmlhttpRequest({
-                    method: 'POST',
-                    url: 'https://api.anthropic.com/v1/messages',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                        'anthropic-version': '2023-06-01'
-                    },
-                    data: JSON.stringify(requestBody),
-                    onload: function(response) {
-                        self.handlePeopleFullEvaluationResponse(response, fullProfileMarkdown, resolve, reject);
-                    },
-                    onerror: function(error) {
-                        console.error('[LiSeSca] People AI full evaluation request failed:', error);
-                        reject(new Error('Network error'));
-                    },
-                    ontimeout: function() {
-                        console.error('[LiSeSca] People AI full evaluation request timed out');
-                        reject(new Error('Request timeout'));
-                    },
-                    timeout: 60000
-                });
-            });
-        },
-
-        /**
-         * Handle the full profile evaluation response.
-         * @param {Object} response - The GM_xmlhttpRequest response object.
-         * @param {string} profileMarkdown - The profile markdown sent for evaluation.
-         * @param {Function} resolve - Promise resolve function.
-         * @param {Function} reject - Promise reject function.
-         */
-        handlePeopleFullEvaluationResponse: function(response, profileMarkdown, resolve, reject) {
-            if (response.status !== 200) {
-                console.error('[LiSeSca] People AI full evaluation API error:', response.status, response.responseText);
-                resolve({ accept: true, reason: 'API error ' + response.status });
-                return;
-            }
-
-            try {
-                var data = JSON.parse(response.responseText);
-                var toolUse = null;
-                if (data.content && Array.isArray(data.content)) {
-                    for (var i = 0; i < data.content.length; i++) {
-                        if (data.content[i].type === 'tool_use') {
-                            toolUse = data.content[i];
-                            break;
-                        }
-                    }
-                }
-
-                if (!toolUse || toolUse.name !== 'people_full_evaluation') {
-                    console.warn('[LiSeSca] Unexpected people full evaluation response, accepting profile.');
-                    resolve({ accept: true, reason: 'Unexpected response format' });
-                    return;
-                }
-
-                var accept = toolUse.input.accept === true;
-                var reason = toolUse.input.reason || '(no reason provided)';
-
-                // Update conversation history (not really used for full profile, but keeping for consistency)
-                this.peopleConversationHistory.push({ role: 'user', content: profileMarkdown });
-                this.peopleConversationHistory.push({
-                    role: 'assistant',
-                    content: [toolUse]
-                });
-                this.peopleConversationHistory.push({
-                    role: 'user',
-                    content: [
-                        {
-                            type: 'tool_result',
-                            tool_use_id: toolUse.id,
-                            content: accept ? 'Person accepted and saved.' : 'Person rejected after full review.'
-                        }
-                    ]
-                });
-
-                resolve({ accept: accept, reason: reason });
-
-            } catch (error) {
-                console.error('[LiSeSca] Failed to parse people full evaluation response:', error);
-                resolve({ accept: true, reason: 'Parse error: ' + error.message });
+                console.error('[LiSeSca] Failed to parse people scoring response:', error);
+                resolve({ score: 3, label: 'Moderate interest', reason: 'Parse error: ' + error.message });
             }
         }
     };
@@ -2610,8 +2403,6 @@ USER'S CRITERIA:
             var fullAICheck = null;
             var peopleAIEnabledRow = null;
             var peopleAIEnabledCheck = null;
-            var peopleFullAIRow = null;
-            var peopleFullAICheck = null;
             if (isJobs) {
                 includeViewedRow = document.createElement('div');
                 includeViewedRow.className = 'lisesca-toggle-row';
@@ -2695,7 +2486,7 @@ USER'S CRITERIA:
                     }
                 });
             } else {
-                // AI people selection toggle
+                // AI people rating toggle
                 peopleAIEnabledRow = document.createElement('div');
                 peopleAIEnabledRow.className = 'lisesca-toggle-row';
 
@@ -2713,39 +2504,13 @@ USER'S CRITERIA:
                 peopleAIEnabledCheck.checked = peopleAIConfigured && State.getPeopleAIEnabled();
                 peopleAIEnabledCheck.disabled = !peopleAIConfigured;
 
-                peopleAIEnabledLabel.appendChild(peopleAIEnabledCheck);
-                peopleAIEnabledLabel.appendChild(document.createTextNode('AI Deep Scrape'));
-                peopleAIEnabledRow.appendChild(peopleAIEnabledLabel);
-
-                // Full AI evaluation toggle (indented, only visible when AI enabled)
-                peopleFullAIRow = document.createElement('div');
-                peopleFullAIRow.className = 'lisesca-toggle-row';
-                peopleFullAIRow.id = 'lisesca-people-full-ai-row';
-                peopleFullAIRow.style.marginLeft = '16px';
-                peopleFullAIRow.style.display = (peopleAIConfigured && peopleAIEnabledCheck.checked) ? 'flex' : 'none';
-
-                var peopleFullAILabel = document.createElement('label');
-                peopleFullAILabel.className = 'lisesca-checkbox-label';
-
-                peopleFullAICheck = document.createElement('input');
-                peopleFullAICheck.type = 'checkbox';
-                peopleFullAICheck.id = 'lisesca-people-full-ai-enabled';
-                peopleFullAICheck.checked = peopleAIConfigured && State.getPeopleFullAIEnabled();
-                peopleFullAICheck.disabled = !peopleAIConfigured;
-
-                peopleFullAICheck.addEventListener('change', function() {
-                    State.savePeopleFullAIEnabled(peopleFullAICheck.checked);
-                });
-
-                peopleFullAILabel.appendChild(peopleFullAICheck);
-                peopleFullAILabel.appendChild(document.createTextNode('Full AI evaluation'));
-                peopleFullAIRow.appendChild(peopleFullAILabel);
-
-                // AI enabled toggle controls Full AI row visibility
                 peopleAIEnabledCheck.addEventListener('change', function() {
                     State.savePeopleAIEnabled(peopleAIEnabledCheck.checked);
-                    UI.updatePeopleAIToggleState();
                 });
+
+                peopleAIEnabledLabel.appendChild(peopleAIEnabledCheck);
+                peopleAIEnabledLabel.appendChild(document.createTextNode('AI Rating'));
+                peopleAIEnabledRow.appendChild(peopleAIEnabledLabel);
             }
 
             // GO button — dispatches to the correct controller
@@ -2780,9 +2545,6 @@ USER'S CRITERIA:
             }
             if (peopleAIEnabledRow) {
                 this.menu.appendChild(peopleAIEnabledRow);
-            }
-            if (peopleFullAIRow) {
-                this.menu.appendChild(peopleFullAIRow);
             }
             this.menu.appendChild(goBtn);
 
@@ -2996,22 +2758,32 @@ USER'S CRITERIA:
 
         /**
          * Show the no-results notification with statistics.
-         * @param {number} evaluated - Number of jobs evaluated by AI.
+         * @param {number} evaluated - Number of items evaluated by AI.
          * @param {number} pagesScraped - Number of pages scanned.
+         * @param {string} itemType - Type of item ('job' or 'profile'). Defaults to 'job'.
          */
-        showNoResults: function(evaluated, pagesScraped) {
+        showNoResults: function(evaluated, pagesScraped, itemType) {
             // Hide status area first
             this.hideStatus();
             this.hideAIStats();
 
+            var type = itemType || 'job';
+            var plural = type + (evaluated !== 1 ? 's' : '');
+
+            // Update the title based on item type
+            var titleEl = document.getElementById('lisesca-no-results-title');
+            if (titleEl) {
+                titleEl.textContent = 'No matching ' + plural + ' found';
+            }
+
             // Update the stats text
             var statsEl = document.getElementById('lisesca-no-results-stats');
             if (statsEl) {
-                var statsText = evaluated + ' job' + (evaluated !== 1 ? 's' : '') + ' scanned';
+                var statsText = evaluated + ' ' + plural + ' scanned';
                 if (pagesScraped > 1) {
                     statsText += ' across ' + pagesScraped + ' pages';
                 }
-                statsText += ', none matched your criteria';
+                statsText += ', none matched your criteria (score >= 3)';
                 statsEl.textContent = statsText;
             }
 
@@ -3562,13 +3334,10 @@ USER'S CRITERIA:
         /**
          * Update the People AI toggle checkbox state based on configuration.
          * Disables the checkbox if AI is not configured.
-         * Also updates the Full AI toggle visibility and state.
          */
         updatePeopleAIToggleState: function() {
             var aiCheck = document.getElementById('lisesca-people-ai-enabled');
             var aiLabel = aiCheck ? aiCheck.closest('.lisesca-checkbox-label') : null;
-            var fullAIRow = document.getElementById('lisesca-people-full-ai-row');
-            var fullAICheck = document.getElementById('lisesca-people-full-ai-enabled');
 
             if (!aiCheck || !aiLabel) {
                 return;
@@ -3583,18 +3352,6 @@ USER'S CRITERIA:
                 aiLabel.classList.add('lisesca-disabled');
                 aiCheck.checked = false;
                 State.savePeopleAIEnabled(false);
-            }
-
-            if (fullAIRow && fullAICheck) {
-                if (isConfigured && aiCheck.checked) {
-                    fullAIRow.style.display = 'flex';
-                    fullAICheck.disabled = false;
-                } else {
-                    fullAIRow.style.display = 'none';
-                    fullAICheck.checked = false;
-                    fullAICheck.disabled = true;
-                    State.savePeopleFullAIEnabled(false);
-                }
             }
         },
 
@@ -3849,10 +3606,10 @@ USER'S CRITERIA:
          * Wait for search result cards to appear in the DOM.
          * LinkedIn is an SPA and may load results asynchronously,
          * so we poll for up to 10 seconds before giving up.
-         * @returns {Promise<NodeList>} The list of result card elements.
+         * @returns {Promise<NodeList>} The list of result card elements (may be empty).
          */
         waitForResults: function() {
-            return new Promise(function(resolve, reject) {
+            return new Promise(function(resolve) {
                 const maxWaitMs = 10000;
                 const pollIntervalMs = 500;
                 let elapsed = 0;
@@ -3868,8 +3625,8 @@ USER'S CRITERIA:
                     elapsed += pollIntervalMs;
                     if (elapsed >= maxWaitMs) {
                         clearInterval(poll);
-                        console.warn('[LiSeSca] No result cards found after ' + maxWaitMs + 'ms.');
-                        reject(new Error('No search result cards found on this page.'));
+                        console.log('[LiSeSca] No result cards found after ' + maxWaitMs + 'ms (end of results).');
+                        resolve([]); // Return empty array instead of rejecting
                     }
                 }, pollIntervalMs);
             });
@@ -4062,47 +3819,282 @@ USER'S CRITERIA:
         }
     };
 
-    // ===== CSS SELECTORS (PROFILE PAGE) =====
-    // Resilient selectors for LinkedIn profile pages.
-    // Uses multiple fallbacks to handle DOM changes and variants.
-    const ProfileSelectors = {
-        NAME: [
-            'main h1',
-            'h1.text-heading-xlarge',
-            'h1.inline.t-24.v-align-middle.break-words'
-        ],
-        HEADLINE: [
-            'main .text-body-medium.break-words',
-            'main .text-body-medium'
-        ],
-        LOCATION: [
-            'main .text-body-small.inline.t-black--light.break-words',
-            'main span.text-body-small'
-        ],
-        // About section - may or may not have id="about"
-        ABOUT_SECTION: [
-            'section#about',
-            'section[id*="about"]',
-            'div[data-generated-suggestion-target*="profileActionDelegate"]'
-        ],
-        // About text is inside inline-show-more-text div, within a span[aria-hidden="true"]
-        ABOUT_TEXT: [
-            '.inline-show-more-text--is-collapsed span[aria-hidden="true"]',
-            '[class*="inline-show-more-text"] span[aria-hidden="true"]',
-            '.inline-show-more-text span[aria-hidden="true"]',
-            '.pv-about__summary-text'
-        ],
-        EXPERIENCE_SECTION: [
-            'section#experience',
-            'section[id*="experience"]',
-            'section[data-section="experience"]'
-        ],
-        SHOW_MORE_BUTTON: [
-            'button[aria-expanded="false"]',
-            'button[aria-label*="more"]',
-            'button[aria-label="See more"]',
-            'button[aria-label="Show more"]'
-        ]
+    // ===== PAGINATION (PEOPLE) =====
+    // Handles navigation between search result pages.
+    // LinkedIn uses the "page=" URL parameter for pagination.
+
+    const Paginator = {
+
+        /**
+         * Get the current page number from the URL's "page=" parameter.
+         * @returns {number} Page number (1 if not specified).
+         */
+        getCurrentPage: function() {
+            const url = new URL(window.location.href);
+            const pageParam = url.searchParams.get('page');
+            return pageParam ? parseInt(pageParam, 10) : 1;
+        },
+
+        /**
+         * Get the base search URL (without the "page" parameter).
+         * @returns {string} The cleaned base URL.
+         */
+        getBaseSearchUrl: function() {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('page');
+            return url.toString();
+        },
+
+        /**
+         * Navigate to a specific page by updating the URL.
+         * @param {number} pageNum - The page number to navigate to.
+         */
+        navigateToPage: function(pageNum) {
+            const baseUrl = State.get(State.KEYS.SEARCH_URL, this.getBaseSearchUrl());
+            const url = new URL(baseUrl);
+            url.searchParams.set('page', pageNum.toString());
+            const targetUrl = url.toString();
+
+            console.log('[LiSeSca] Navigating to page ' + pageNum + ': ' + targetUrl);
+            window.location.href = targetUrl;
+        }
+    };
+
+    // ===== OUTPUT GENERATION (PEOPLE) =====
+    // Formats scraped profile data into XLSX, CSV, and Markdown.
+
+    const Output = {
+
+        /**
+         * Format a single profile into Markdown.
+         * @param {Object} profile - A profile data object.
+         * @returns {string} The formatted Markdown block.
+         */
+        formatProfile: function(profile) {
+            const lines = [];
+            lines.push('# ' + profile.fullName);
+            lines.push('');
+
+            if (profile.connectionDegree === 0) {
+                lines.push('No connection.');
+            } else if (profile.connectionDegree) {
+                const ordinal = this.toOrdinal(profile.connectionDegree);
+                lines.push('Connection: ' + ordinal);
+            }
+
+            var headline = profile.headline || profile.description || '';
+            if (headline) {
+                lines.push('Headline: ' + headline);
+            }
+            lines.push('Location: ' + (profile.location || '(none)'));
+            lines.push('Full profile URL: ' + (profile.profileUrl || '(none)'));
+
+            if (profile.aiScore !== undefined) {
+                lines.push('');
+                lines.push('**AI Score:** ' + profile.aiScore + '/5 (' + (profile.aiLabel || '') + ')');
+                if (profile.aiReason) {
+                    lines.push('**AI Reason:** ' + profile.aiReason);
+                }
+            }
+
+            return lines.join('\n');
+        },
+
+        /**
+         * Convert a number to its ordinal string.
+         * @param {number} n - The number.
+         * @returns {string} The ordinal string.
+         */
+        toOrdinal: function(n) {
+            const suffixes = { 1: 'st', 2: 'nd', 3: 'rd' };
+            const lastTwo = n % 100;
+            if (lastTwo >= 11 && lastTwo <= 13) {
+                return n + 'th';
+            }
+            const lastDigit = n % 10;
+            return n + (suffixes[lastDigit] || 'th');
+        },
+
+        /**
+         * Generate a complete Markdown document from an array of profiles.
+         * @param {Array} profiles - Array of profile data objects.
+         * @returns {string} The complete Markdown content.
+         */
+        generateMarkdown: function(profiles) {
+            const blocks = profiles.map(function(profile) {
+                return Output.formatProfile(profile);
+            });
+            return blocks.join('\n\n---\n\n') + '\n';
+        },
+
+        COLUMN_HEADERS: ['Name', 'Title/Description', 'Location', 'LinkedIn URL', 'Connection degree',
+            'AI Score', 'AI Rating', 'AI Reason'],
+
+        /**
+         * Convert a profile object into a row array.
+         * @param {Object} profile - A profile data object.
+         * @returns {Array<string|number>} Array of cell values.
+         */
+        profileToRow: function(profile) {
+            return [
+                profile.fullName || '',
+                profile.description || '',
+                profile.location || '',
+                profile.profileUrl || '',
+                profile.connectionDegree || 0,
+                profile.aiScore !== undefined ? profile.aiScore : '',
+                profile.aiLabel || '',
+                profile.aiReason || ''
+            ];
+        },
+
+
+        /**
+         * Escape a value for CSV output (RFC 4180).
+         * @param {*} value - The cell value to escape.
+         * @returns {string} The CSV-safe string.
+         */
+        escapeCSVField: function(value) {
+            var str = String(value);
+            return '"' + str.replace(/"/g, '""') + '"';
+        },
+
+        /**
+         * Generate a CSV string from an array of profiles.
+         * @param {Array} profiles - Array of profile data objects.
+         * @returns {string} The complete CSV content.
+         */
+        generateCSV: function(profiles) {
+            var self = this;
+            var lines = [];
+
+            var headerLine = this.COLUMN_HEADERS.map(function(header) {
+                return self.escapeCSVField(header);
+            }).join(',');
+            lines.push(headerLine);
+
+            profiles.forEach(function(profile) {
+                var row = self.profileToRow(profile);
+                var csvLine = row.map(function(cell) {
+                    return self.escapeCSVField(cell);
+                }).join(',');
+                lines.push(csvLine);
+            });
+
+            return lines.join('\r\n') + '\r\n';
+        },
+
+        /**
+         * Generate an XLSX file as a Uint8Array.
+         * @param {Array} profiles - Array of profile data objects.
+         * @returns {Uint8Array} The binary XLSX file content.
+         */
+        generateXLSX: function(profiles) {
+            var self = this;
+            var data = [this.COLUMN_HEADERS];
+            profiles.forEach(function(profile) {
+                data.push(self.profileToRow(profile));
+            });
+
+            var worksheet = XLSX.utils.aoa_to_sheet(data);
+            var workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'LinkedIn Search');
+
+            var xlsxData = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+            return new Uint8Array(xlsxData);
+        },
+
+        /**
+         * Generate a filename based on the current date and time.
+         * Format: YYYY-MM-DD_HH_MM_PEOPLE_LinkedIn.[extension]
+         * @param {string} extension - File extension (default: 'md').
+         * @returns {string} The generated filename.
+         */
+        buildFilename: function(extension) {
+            var ext = extension || 'md';
+            var now = new Date();
+            var year = now.getFullYear();
+            var month = String(now.getMonth() + 1).padStart(2, '0');
+            var day = String(now.getDate()).padStart(2, '0');
+            var hours = String(now.getHours()).padStart(2, '0');
+            var minutes = String(now.getMinutes()).padStart(2, '0');
+            return year + '-' + month + '-' + day + '_' + hours + '_' + minutes
+                + '_PEOPLE_LinkedIn.' + ext;
+        },
+
+        /**
+         * Trigger a file download in the browser.
+         * @param {string|Uint8Array} content - The file content.
+         * @param {string} filename - The desired filename.
+         * @param {string} mimeType - The MIME type for the Blob.
+         */
+        downloadFile: function(content, filename, mimeType) {
+            var type = mimeType || 'text/markdown;charset=utf-8';
+            const blob = new Blob([content], { type: type });
+            const url = URL.createObjectURL(blob);
+
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            link.style.display = 'none';
+
+            document.body.appendChild(link);
+            link.click();
+
+            setTimeout(function() {
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }, 1000);
+
+            console.log('[LiSeSca] File download triggered: ' + filename);
+        },
+
+        /**
+         * Generate output files in the selected formats and trigger downloads.
+         * @param {Array} profiles - Array of profile data objects.
+         */
+        downloadResults: function(profiles) {
+            if (!profiles || profiles.length === 0) {
+                console.warn('[LiSeSca] No profiles to download.');
+                return;
+            }
+
+            var formats = State.getFormats();
+            console.log('[LiSeSca] Downloading in formats: ' + formats.join(', '));
+
+            var self = this;
+            var delayMs = 0;
+
+            if (formats.indexOf('xlsx') !== -1) {
+                setTimeout(function() {
+                    var xlsxData = self.generateXLSX(profiles);
+                    var xlsxFilename = self.buildFilename('xlsx');
+                    self.downloadFile(
+                        xlsxData,
+                        xlsxFilename,
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    );
+                }, delayMs);
+                delayMs += 200;
+            }
+
+            if (formats.indexOf('csv') !== -1) {
+                setTimeout(function() {
+                    var csvContent = self.generateCSV(profiles);
+                    var csvFilename = self.buildFilename('csv');
+                    self.downloadFile(csvContent, csvFilename, 'text/csv;charset=utf-8');
+                }, delayMs);
+                delayMs += 200;
+            }
+
+            if (formats.indexOf('md') !== -1) {
+                setTimeout(function() {
+                    var markdown = self.generateMarkdown(profiles);
+                    var mdFilename = self.buildFilename('md');
+                    self.downloadFile(markdown, mdFilename, 'text/markdown;charset=utf-8');
+                }, delayMs);
+            }
+        }
     };
 
     // ===== TURNDOWN SERVICE =====
@@ -4181,906 +4173,6 @@ USER'S CRITERIA:
         var doc = parser.parseFromString(input, 'text/html');
         return td.turndown(doc.body);
     }
-
-    // ===== PROFILE EXTRACTION (PEOPLE) =====
-    // Extracts full profile data from a LinkedIn profile page.
-
-    const ProfileExtractor = {
-
-        /**
-         * Check if the current page looks like a LinkedIn profile page.
-         * @returns {boolean}
-         */
-        isOnProfilePage: function() {
-            var href = window.location.href;
-            return href.indexOf('linkedin.com/in/') !== -1 || href.indexOf('linkedin.com/pub/') !== -1;
-        },
-
-        /**
-         * Wait for the profile page to load key content.
-         * @returns {Promise<void>}
-         */
-        waitForProfileLoad: function() {
-            var self = this;
-            return new Promise(function(resolve, reject) {
-                var maxWaitMs = 12000;
-                var pollIntervalMs = 400;
-                var elapsed = 0;
-
-                var poll = setInterval(function() {
-                    var nameEl = self.getFirstMatch(ProfileSelectors.NAME, document);
-                    var expSection = self.getFirstMatch(ProfileSelectors.EXPERIENCE_SECTION, document);
-                    if (nameEl || expSection) {
-                        clearInterval(poll);
-                        resolve();
-                        return;
-                    }
-                    elapsed += pollIntervalMs;
-                    if (elapsed >= maxWaitMs) {
-                        clearInterval(poll);
-                        reject(new Error('Profile content did not load in time.'));
-                    }
-                }, pollIntervalMs);
-            });
-        },
-
-        /**
-         * Determine if this profile is restricted/private.
-         * @returns {boolean}
-         */
-        isRestrictedProfile: function() {
-            var name = this.extractName();
-            if (name && name.toLowerCase() === 'linkedin member') {
-                return true;
-            }
-
-            var bodyText = document.body ? (document.body.textContent || '') : '';
-            var restrictedPhrases = [
-                'This profile is not available',
-                'Profile is private',
-                'LinkedIn Member',
-                'You do not have access'
-            ];
-
-            for (var i = 0; i < restrictedPhrases.length; i++) {
-                if (bodyText.indexOf(restrictedPhrases[i]) !== -1) {
-                    return true;
-                }
-            }
-
-            return false;
-        },
-
-        /**
-         * Click all "Show more" / "See more" buttons to expand collapsed text.
-         */
-        clickShowMore: function() {
-            var buttons = this.getAllMatches(ProfileSelectors.SHOW_MORE_BUTTON, document);
-            buttons.forEach(function(btn) {
-                try {
-                    btn.click();
-                } catch (error) {
-                    // Ignore individual failures
-                }
-            });
-        },
-
-        /**
-         * Extract the full profile data object.
-         * @returns {Object} Profile data.
-         */
-        extractFullProfile: function() {
-            var fullName = this.extractName();
-            var headline = this.extractHeadline();
-            var profileAbout = this.extractAbout();
-            var location = this.extractLocation();
-            var profileUrl = this.extractProfileUrl();
-
-            var roles = this.extractExperienceEntries();
-            var currentRole = roles.length > 0 ? roles[0] : null;
-            var pastRoles = roles.length > 1 ? roles.slice(1, 4) : [];
-
-            return {
-                fullName: fullName,
-                headline: headline,
-                profileAbout: profileAbout,
-                location: location,
-                profileUrl: profileUrl,
-                currentRole: currentRole,
-                pastRoles: pastRoles
-            };
-        },
-
-        /**
-         * Format a full profile for AI evaluation.
-         * @param {Object} profile - Full profile data.
-         * @returns {string} Markdown summary for AI.
-         */
-        formatProfileForAI: function(profile) {
-            var lines = [];
-            lines.push('## ' + (profile.fullName || 'Unknown Name'));
-
-            if (profile.headline) {
-                lines.push('**Headline:** ' + profile.headline);
-            }
-            if (profile.location) {
-                lines.push('**Location:** ' + profile.location);
-            }
-            if (profile.connectionDegree) {
-                lines.push('**Connection degree:** ' + profile.connectionDegree);
-            }
-            if (profile.profileUrl) {
-                lines.push('**Profile:** ' + profile.profileUrl);
-            }
-
-            if (profile.profileAbout) {
-                lines.push('');
-                lines.push('**About:**');
-                lines.push(profile.profileAbout);
-            }
-
-            if (profile.currentRole) {
-                lines.push('');
-                lines.push('**Current Role:** ' + this.formatRoleLine(profile.currentRole));
-            }
-
-            if (profile.pastRoles && profile.pastRoles.length > 0) {
-                lines.push('');
-                lines.push('**Past Roles:**');
-                profile.pastRoles.forEach(function(role) {
-                    lines.push('- ' + ProfileExtractor.formatRoleLine(role));
-                });
-            }
-
-            return lines.join('\n');
-        },
-
-        /**
-         * Extract the profile name.
-         * @returns {string}
-         */
-        extractName: function() {
-            return this.extractText(ProfileSelectors.NAME, document);
-        },
-
-        /**
-         * Extract the headline text.
-         * @returns {string}
-         */
-        extractHeadline: function() {
-            return this.extractText(ProfileSelectors.HEADLINE, document);
-        },
-
-        /**
-         * Extract the location text.
-         * @returns {string}
-         */
-        extractLocation: function() {
-            return this.extractText(ProfileSelectors.LOCATION, document);
-        },
-
-        /**
-         * Extract the "About" section text.
-         * @returns {string}
-         */
-        extractAbout: function() {
-            // Try to find the About section first
-            var section = this.getFirstMatch(ProfileSelectors.ABOUT_SECTION, document);
-
-            // If we have an about section, look for the text within it
-            if (section) {
-                var aboutEl = this.getFirstMatch(ProfileSelectors.ABOUT_TEXT, section);
-                if (aboutEl) {
-                    return (aboutEl.textContent || '').trim();
-                }
-            }
-
-            // Fallback: search the entire page for About-style text containers
-            var aboutTextEl = this.getFirstMatch(ProfileSelectors.ABOUT_TEXT, document);
-            if (aboutTextEl) {
-                // Make sure it's not inside Experience section
-                var expSection = this.getFirstMatch(ProfileSelectors.EXPERIENCE_SECTION, document);
-                if (expSection && expSection.contains(aboutTextEl)) {
-                    return '';
-                }
-                return (aboutTextEl.textContent || '').trim();
-            }
-
-            return '';
-        },
-
-        /**
-         * Extract the profile URL without query params.
-         * @returns {string}
-         */
-        extractProfileUrl: function() {
-            var href = window.location.href;
-            try {
-                var url = new URL(href);
-                return url.origin + url.pathname;
-            } catch (error) {
-                return href;
-            }
-        },
-
-        /**
-         * Extract experience entries (current + past roles).
-         * LinkedIn has two structures:
-         * 1. Simple: one role per entry (role title, company, dates, location)
-         * 2. Grouped: company header with nested sub-roles
-         * @returns {Array<Object>} Roles in descending order (most recent first).
-         */
-        extractExperienceEntries: function() {
-            var section = this.getFirstMatch(ProfileSelectors.EXPERIENCE_SECTION, document);
-            if (!section) {
-                console.log('[LiSeSca] No experience section found.');
-                return [];
-            }
-
-            var roles = [];
-
-            // Get top-level experience items (either companies or single roles)
-            var topItems = section.querySelectorAll('li.artdeco-list__item');
-
-            for (var i = 0; i < topItems.length; i++) {
-                var item = topItems[i];
-
-                // Check if this is a grouped entry (has sub-roles)
-                var subRolesContainer = item.querySelector('.pvs-entity__sub-components ul');
-
-                if (subRolesContainer) {
-                    // Grouped entry: extract company name from header, then each sub-role
-                    var companyName = this.extractCompanyFromHeader(item);
-                    var subItems = subRolesContainer.querySelectorAll(':scope > li');
-
-                    for (var j = 0; j < subItems.length; j++) {
-                        var role = this.extractRoleFromSubEntry(subItems[j], companyName);
-                        if (role && role.title) {
-                            roles.push(role);
-                        }
-                    }
-                } else {
-                    // Simple entry: single role
-                    var role = this.extractSimpleRole(item);
-                    if (role && role.title) {
-                        roles.push(role);
-                    }
-                }
-
-                // Limit to first 4 entries for efficiency (current + 3 past)
-                if (roles.length >= 4) {
-                    break;
-                }
-            }
-
-            console.log('[LiSeSca] Extracted ' + roles.length + ' experience entries.');
-            return roles;
-        },
-
-        /**
-         * Extract company name from a grouped experience header.
-         * @param {HTMLElement} item - The top-level experience item.
-         * @returns {string} Company name.
-         */
-        extractCompanyFromHeader: function(item) {
-            // The company name is in the header's bold text
-            var boldSpan = item.querySelector('.mr1.hoverable-link-text.t-bold span[aria-hidden="true"]');
-            if (boldSpan) {
-                return (boldSpan.textContent || '').trim();
-            }
-            // Fallback to any t-bold span
-            boldSpan = item.querySelector('.t-bold span[aria-hidden="true"]');
-            return boldSpan ? (boldSpan.textContent || '').trim() : '';
-        },
-
-        /**
-         * Extract a role from a sub-entry within a grouped company.
-         * @param {HTMLElement} subEntry - The nested role list item.
-         * @param {string} companyName - The company name from parent.
-         * @returns {Object|null} Role data.
-         */
-        extractRoleFromSubEntry: function(subEntry, companyName) {
-            if (!subEntry) {
-                return null;
-            }
-
-            // Title is in bold span
-            var titleEl = subEntry.querySelector('.mr1.hoverable-link-text.t-bold span[aria-hidden="true"]');
-            if (!titleEl) {
-                titleEl = subEntry.querySelector('.t-bold span[aria-hidden="true"]');
-            }
-            var title = titleEl ? (titleEl.textContent || '').trim() : '';
-
-            // Dates from caption wrapper or t-black--light
-            var dates = this.extractDatesFromEntry(subEntry);
-
-            // Location from t-black--light (second occurrence typically)
-            var location = this.extractLocationFromEntry(subEntry);
-
-            return {
-                title: title,
-                company: companyName,
-                description: '',
-                location: location,
-                duration: dates
-            };
-        },
-
-        /**
-         * Extract a simple role (single entry, not grouped).
-         * @param {HTMLElement} item - The experience list item.
-         * @returns {Object|null} Role data.
-         */
-        extractSimpleRole: function(item) {
-            if (!item) {
-                return null;
-            }
-
-            // Title is in bold span within the main content area
-            var titleEl = item.querySelector('.mr1.hoverable-link-text.t-bold span[aria-hidden="true"]');
-            if (!titleEl) {
-                titleEl = item.querySelector('.t-bold span[aria-hidden="true"]');
-            }
-            var title = titleEl ? (titleEl.textContent || '').trim() : '';
-
-            // Company is in t-14 t-normal (not t-black--light)
-            var companyEl = item.querySelector('span.t-14.t-normal:not(.t-black--light) span[aria-hidden="true"]');
-            var company = companyEl ? (companyEl.textContent || '').trim() : '';
-
-            // Dates
-            var dates = this.extractDatesFromEntry(item);
-
-            // Location
-            var location = this.extractLocationFromEntry(item);
-
-            return {
-                title: title,
-                company: company,
-                description: '',
-                location: location,
-                duration: dates
-            };
-        },
-
-        /**
-         * Extract dates/duration from an entry.
-         * @param {HTMLElement} entry - The entry element.
-         * @returns {string} Duration string.
-         */
-        extractDatesFromEntry: function(entry) {
-            // Try caption wrapper first (e.g., "Dec 2013 - Present · 12 yrs 3 mos")
-            var captionEl = entry.querySelector('.pvs-entity__caption-wrapper[aria-hidden="true"]');
-            if (captionEl) {
-                return (captionEl.textContent || '').trim();
-            }
-
-            // Fallback: t-black--light spans, first one is usually dates
-            var lightSpans = entry.querySelectorAll('span.t-14.t-normal.t-black--light span[aria-hidden="true"]');
-            if (lightSpans.length > 0) {
-                return (lightSpans[0].textContent || '').trim();
-            }
-
-            return '';
-        },
-
-        /**
-         * Extract location from an entry.
-         * @param {HTMLElement} entry - The entry element.
-         * @returns {string} Location string.
-         */
-        extractLocationFromEntry: function(entry) {
-            // Location is usually the second t-black--light span (after dates)
-            var lightSpans = entry.querySelectorAll('span.t-14.t-normal.t-black--light span[aria-hidden="true"]');
-
-            // Skip the caption wrapper content, look for standalone location
-            for (var i = 0; i < lightSpans.length; i++) {
-                var text = (lightSpans[i].textContent || '').trim();
-                // If it looks like a location (no dates pattern)
-                if (text && !text.match(/\d{4}/) && !text.match(/\d+\s*(yr|mo|year|month)/i)) {
-                    return text;
-                }
-            }
-
-            return '';
-        },
-
-        /**
-         * Extract a single role entry from an experience list item (legacy fallback).
-         * @param {HTMLElement} entry - The experience list item.
-         * @returns {Object|null} Role data.
-         */
-        extractRoleFromEntry: function(entry) {
-            return this.extractSimpleRole(entry);
-        },
-
-        /**
-         * Clean company name string by removing extra qualifiers.
-         * @param {string} raw - Raw company text.
-         * @returns {string}
-         */
-        cleanCompanyName: function(raw) {
-            if (!raw) {
-                return '';
-            }
-            var parts = raw.split('·');
-            return parts[0].trim();
-        },
-
-        /**
-         * Format a role into a single line summary.
-         * @param {Object} role - Role data.
-         * @returns {string}
-         */
-        formatRoleLine: function(role) {
-            var parts = [];
-            if (role.title) {
-                parts.push(role.title);
-            }
-            if (role.company) {
-                parts.push('at ' + role.company);
-            }
-            var suffix = [];
-            if (role.duration) {
-                suffix.push(role.duration);
-            }
-            if (role.location) {
-                suffix.push(role.location);
-            }
-            var line = parts.join(' ');
-            if (suffix.length > 0) {
-                line += ' (' + suffix.join(', ') + ')';
-            }
-            if (role.description) {
-                line += ' — ' + role.description;
-            }
-            return line || '(unknown role)';
-        },
-
-        /**
-         * Extract text content using a selector list.
-         * @param {Array<string>} selectors - Selector list.
-         * @param {HTMLElement|Document} root - Root to search within.
-         * @returns {string}
-         */
-        extractText: function(selectors, root) {
-            var el = this.getFirstMatch(selectors, root);
-            return el ? (el.textContent || '').trim() : '';
-        },
-
-        /**
-         * Get the first element that matches any selector.
-         * @param {Array<string>} selectors - Selector list.
-         * @param {HTMLElement|Document} root - Root to search within.
-         * @returns {HTMLElement|null}
-         */
-        getFirstMatch: function(selectors, root) {
-            if (!selectors || selectors.length === 0) {
-                return null;
-            }
-            var scope = root || document;
-            for (var i = 0; i < selectors.length; i++) {
-                var el = scope.querySelector(selectors[i]);
-                if (el) {
-                    return el;
-                }
-            }
-            return null;
-        },
-
-        /**
-         * Get all matching elements for a selector list.
-         * @param {Array<string>} selectors - Selector list.
-         * @param {HTMLElement|Document} root - Root to search within.
-         * @returns {Array<HTMLElement>}
-         */
-        getAllMatches: function(selectors, root) {
-            var scope = root || document;
-            var results = [];
-            if (!selectors || selectors.length === 0) {
-                return results;
-            }
-            for (var i = 0; i < selectors.length; i++) {
-                var nodes = scope.querySelectorAll(selectors[i]);
-                for (var j = 0; j < nodes.length; j++) {
-                    if (results.indexOf(nodes[j]) === -1) {
-                        results.push(nodes[j]);
-                    }
-                }
-            }
-            return results;
-        }
-    };
-
-    // ===== PAGINATION (PEOPLE) =====
-    // Handles navigation between search result pages.
-    // LinkedIn uses the "page=" URL parameter for pagination.
-
-    const Paginator = {
-
-        /**
-         * Get the current page number from the URL's "page=" parameter.
-         * @returns {number} Page number (1 if not specified).
-         */
-        getCurrentPage: function() {
-            const url = new URL(window.location.href);
-            const pageParam = url.searchParams.get('page');
-            return pageParam ? parseInt(pageParam, 10) : 1;
-        },
-
-        /**
-         * Get the base search URL (without the "page" parameter).
-         * @returns {string} The cleaned base URL.
-         */
-        getBaseSearchUrl: function() {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('page');
-            return url.toString();
-        },
-
-        /**
-         * Navigate to a specific page by updating the URL.
-         * @param {number} pageNum - The page number to navigate to.
-         */
-        navigateToPage: function(pageNum) {
-            const baseUrl = State.get(State.KEYS.SEARCH_URL, this.getBaseSearchUrl());
-            const url = new URL(baseUrl);
-            url.searchParams.set('page', pageNum.toString());
-            const targetUrl = url.toString();
-
-            console.log('[LiSeSca] Navigating to page ' + pageNum + ': ' + targetUrl);
-            window.location.href = targetUrl;
-        }
-    };
-
-    // ===== OUTPUT GENERATION (PEOPLE) =====
-    // Formats scraped profile data into XLSX, CSV, and Markdown.
-
-    const Output = {
-
-        /**
-         * Format a single profile into Markdown.
-         * @param {Object} profile - A profile data object.
-         * @returns {string} The formatted Markdown block.
-         */
-        formatProfile: function(profile) {
-            const lines = [];
-            lines.push('# ' + profile.fullName);
-            lines.push('');
-
-            if (profile.connectionDegree === 0) {
-                lines.push('No connection.');
-            } else if (profile.connectionDegree) {
-                const ordinal = this.toOrdinal(profile.connectionDegree);
-                lines.push('Connection: ' + ordinal);
-            }
-
-            var headline = profile.headline || profile.description || '';
-            if (headline) {
-                lines.push('Headline: ' + headline);
-            }
-            lines.push('Location: ' + (profile.location || '(none)'));
-            lines.push('Full profile URL: ' + (profile.profileUrl || '(none)'));
-
-            if (profile.profileAbout) {
-                lines.push('');
-                lines.push('## About');
-                lines.push('');
-                lines.push(profile.profileAbout);
-            }
-
-            if (profile.currentRole) {
-                lines.push('');
-                lines.push('## Current Role');
-                lines.push('');
-                lines.push(this.formatRoleDetails(profile.currentRole));
-            }
-
-            if (profile.pastRoles && profile.pastRoles.length > 0) {
-                lines.push('');
-                lines.push('## Past Roles');
-                lines.push('');
-                profile.pastRoles.forEach(function(role, index) {
-                    lines.push((index + 1) + '. ' + Output.formatRoleDetails(role));
-                });
-            }
-
-            return lines.join('\n');
-        },
-
-        /**
-         * Convert a number to its ordinal string.
-         * @param {number} n - The number.
-         * @returns {string} The ordinal string.
-         */
-        toOrdinal: function(n) {
-            const suffixes = { 1: 'st', 2: 'nd', 3: 'rd' };
-            const lastTwo = n % 100;
-            if (lastTwo >= 11 && lastTwo <= 13) {
-                return n + 'th';
-            }
-            const lastDigit = n % 10;
-            return n + (suffixes[lastDigit] || 'th');
-        },
-
-        /**
-         * Generate a complete Markdown document from an array of profiles.
-         * @param {Array} profiles - Array of profile data objects.
-         * @returns {string} The complete Markdown content.
-         */
-        generateMarkdown: function(profiles) {
-            const blocks = profiles.map(function(profile) {
-                return Output.formatProfile(profile);
-            });
-            return blocks.join('\n\n---\n\n') + '\n';
-        },
-
-        COLUMN_HEADERS_BASIC: ['Name', 'Title/Description', 'Location', 'LinkedIn URL', 'Connection degree'],
-        COLUMN_HEADERS_DEEP: [
-            'Name', 'Headline', 'Location', 'LinkedIn URL', 'Connection degree',
-            'About',
-            'Current Title', 'Current Company', 'Current Description', 'Current Location', 'Current Duration',
-            'Past Role 1', 'Past Role 2', 'Past Role 3'
-        ],
-
-        /**
-         * Convert a profile object into a row array.
-         * @param {Object} profile - A profile data object.
-         * @returns {Array<string|number>} Array of cell values.
-         */
-        profileToRow: function(profile, useDeep) {
-            if (!useDeep) {
-                return [
-                    profile.fullName || '',
-                    profile.description || '',
-                    profile.location || '',
-                    profile.profileUrl || '',
-                    profile.connectionDegree || 0
-                ];
-            }
-
-            var currentRole = profile.currentRole || {};
-            var pastRoles = profile.pastRoles || [];
-
-            return [
-                profile.fullName || '',
-                profile.headline || profile.description || '',
-                profile.location || '',
-                profile.profileUrl || '',
-                profile.connectionDegree || 0,
-                profile.profileAbout || '',
-                currentRole.title || '',
-                currentRole.company || '',
-                currentRole.description || '',
-                currentRole.location || '',
-                currentRole.duration || '',
-                this.formatRoleSummary(pastRoles[0]),
-                this.formatRoleSummary(pastRoles[1]),
-                this.formatRoleSummary(pastRoles[2])
-            ];
-        },
-
-        /**
-         * Check if any profiles include deep data.
-         * @param {Array} profiles - Array of profile data objects.
-         * @returns {boolean}
-         */
-        hasDeepData: function(profiles) {
-            if (!profiles || profiles.length === 0) {
-                return false;
-            }
-            return profiles.some(function(profile) {
-                return !!(profile && (profile.currentRole || (profile.pastRoles && profile.pastRoles.length > 0)));
-            });
-        },
-
-        /**
-         * Format a role into a single-line summary.
-         * @param {Object} role - Role data.
-         * @returns {string}
-         */
-        formatRoleSummary: function(role) {
-            if (!role) {
-                return '';
-            }
-            var parts = [];
-            if (role.title) {
-                parts.push(role.title);
-            }
-            if (role.company) {
-                parts.push('@ ' + role.company);
-            }
-            var suffix = [];
-            if (role.duration) {
-                suffix.push(role.duration);
-            }
-            if (role.location) {
-                suffix.push(role.location);
-            }
-            var line = parts.join(' ');
-            if (suffix.length > 0) {
-                line += ' (' + suffix.join(', ') + ')';
-            }
-            return line;
-        },
-
-        /**
-         * Format a role with full details for Markdown.
-         * @param {Object} role - Role data.
-         * @returns {string}
-         */
-        formatRoleDetails: function(role) {
-            if (!role) {
-                return '(no details)';
-            }
-            var lines = [];
-            if (role.title) {
-                lines.push('Title: ' + role.title);
-            }
-            if (role.company) {
-                lines.push('Company: ' + role.company);
-            }
-            if (role.duration) {
-                lines.push('Duration: ' + role.duration);
-            }
-            if (role.location) {
-                lines.push('Location: ' + role.location);
-            }
-            if (role.description) {
-                lines.push('Description: ' + role.description);
-            }
-            return lines.join('\n');
-        },
-
-        /**
-         * Escape a value for CSV output (RFC 4180).
-         * @param {*} value - The cell value to escape.
-         * @returns {string} The CSV-safe string.
-         */
-        escapeCSVField: function(value) {
-            var str = String(value);
-            return '"' + str.replace(/"/g, '""') + '"';
-        },
-
-        /**
-         * Generate a CSV string from an array of profiles.
-         * @param {Array} profiles - Array of profile data objects.
-         * @returns {string} The complete CSV content.
-         */
-        generateCSV: function(profiles) {
-            var self = this;
-            var lines = [];
-
-            var useDeep = this.hasDeepData(profiles);
-            var headers = useDeep ? this.COLUMN_HEADERS_DEEP : this.COLUMN_HEADERS_BASIC;
-            var headerLine = headers.map(function(header) {
-                return self.escapeCSVField(header);
-            }).join(',');
-            lines.push(headerLine);
-
-            profiles.forEach(function(profile) {
-                var row = self.profileToRow(profile, useDeep);
-                var csvLine = row.map(function(cell) {
-                    return self.escapeCSVField(cell);
-                }).join(',');
-                lines.push(csvLine);
-            });
-
-            return lines.join('\r\n') + '\r\n';
-        },
-
-        /**
-         * Generate an XLSX file as a Uint8Array.
-         * @param {Array} profiles - Array of profile data objects.
-         * @returns {Uint8Array} The binary XLSX file content.
-         */
-        generateXLSX: function(profiles) {
-            var self = this;
-            var useDeep = this.hasDeepData(profiles);
-            var headers = useDeep ? this.COLUMN_HEADERS_DEEP : this.COLUMN_HEADERS_BASIC;
-            var data = [headers];
-            profiles.forEach(function(profile) {
-                data.push(self.profileToRow(profile, useDeep));
-            });
-
-            var worksheet = XLSX.utils.aoa_to_sheet(data);
-            var workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, 'LinkedIn Search');
-
-            var xlsxData = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
-            return new Uint8Array(xlsxData);
-        },
-
-        /**
-         * Generate a filename based on the current date and time.
-         * @param {string} extension - File extension (default: 'md').
-         * @returns {string} The generated filename.
-         */
-        buildFilename: function(extension) {
-            var ext = extension || 'md';
-            const now = new Date();
-            const year = now.getFullYear();
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            const day = String(now.getDate()).padStart(2, '0');
-            const hours = String(now.getHours()).padStart(2, '0');
-            const minutes = String(now.getMinutes()).padStart(2, '0');
-            return 'linkedin-search-' + year + '-' + month + '-' + day
-                + '-' + hours + 'h' + minutes + '.' + ext;
-        },
-
-        /**
-         * Trigger a file download in the browser.
-         * @param {string|Uint8Array} content - The file content.
-         * @param {string} filename - The desired filename.
-         * @param {string} mimeType - The MIME type for the Blob.
-         */
-        downloadFile: function(content, filename, mimeType) {
-            var type = mimeType || 'text/markdown;charset=utf-8';
-            const blob = new Blob([content], { type: type });
-            const url = URL.createObjectURL(blob);
-
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = filename;
-            link.style.display = 'none';
-
-            document.body.appendChild(link);
-            link.click();
-
-            setTimeout(function() {
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
-            }, 1000);
-
-            console.log('[LiSeSca] File download triggered: ' + filename);
-        },
-
-        /**
-         * Generate output files in the selected formats and trigger downloads.
-         * @param {Array} profiles - Array of profile data objects.
-         */
-        downloadResults: function(profiles) {
-            if (!profiles || profiles.length === 0) {
-                console.warn('[LiSeSca] No profiles to download.');
-                return;
-            }
-
-            var formats = State.getFormats();
-            console.log('[LiSeSca] Downloading in formats: ' + formats.join(', '));
-
-            var self = this;
-            var delayMs = 0;
-
-            if (formats.indexOf('xlsx') !== -1) {
-                setTimeout(function() {
-                    var xlsxData = self.generateXLSX(profiles);
-                    var xlsxFilename = self.buildFilename('xlsx');
-                    self.downloadFile(
-                        xlsxData,
-                        xlsxFilename,
-                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    );
-                }, delayMs);
-                delayMs += 200;
-            }
-
-            if (formats.indexOf('csv') !== -1) {
-                setTimeout(function() {
-                    var csvContent = self.generateCSV(profiles);
-                    var csvFilename = self.buildFilename('csv');
-                    self.downloadFile(csvContent, csvFilename, 'text/csv;charset=utf-8');
-                }, delayMs);
-                delayMs += 200;
-            }
-
-            if (formats.indexOf('md') !== -1) {
-                setTimeout(function() {
-                    var markdown = self.generateMarkdown(profiles);
-                    var mdFilename = self.buildFilename('md');
-                    self.downloadFile(markdown, mdFilename, 'text/markdown;charset=utf-8');
-                }, delayMs);
-            }
-        }
-    };
 
     // ===== JOB DATA EXTRACTION =====
     // Extracts job data from the left-panel cards and right-panel detail view.
@@ -6038,6 +5130,7 @@ USER'S CRITERIA:
 
         /**
          * Generate a job-specific filename.
+         * Format: YYYY-MM-DD_HH_MM_JOBS_LinkedIn.[extension]
          * @param {string} extension - File extension.
          * @returns {string} The generated filename.
          */
@@ -6049,8 +5142,8 @@ USER'S CRITERIA:
             var day = String(now.getDate()).padStart(2, '0');
             var hours = String(now.getHours()).padStart(2, '0');
             var minutes = String(now.getMinutes()).padStart(2, '0');
-            return 'linkedin-jobs-' + year + '-' + month + '-' + day
-                + '-' + hours + 'h' + minutes + '.' + ext;
+            return year + '-' + month + '-' + day + '_' + hours + '_' + minutes
+                + '_JOBS_LinkedIn.' + ext;
         },
 
         /**
@@ -6653,11 +5746,8 @@ USER'S CRITERIA:
          */
         setupForCurrentPage: function() {
             var pageType = PageDetector.getPageType();
-            var isDeepScrapeActive = State.isScraping()
-                && State.getScrapeMode() === 'people'
-                && State.get(State.KEYS.DEEP_SCRAPE_MODE, 'normal') === 'deep';
 
-            if (pageType === 'unknown' && !(isDeepScrapeActive && ProfileExtractor.isOnProfilePage())) {
+            if (pageType === 'unknown') {
                 console.log('[LiSeSca] Not on a supported page. UI hidden, waiting for navigation.');
                 return;
             }
@@ -6724,12 +5814,6 @@ USER'S CRITERIA:
          * Resume an active people scraping session after a page reload.
          */
         resumeScraping: function() {
-            var deepMode = State.get(State.KEYS.DEEP_SCRAPE_MODE, 'normal') === 'deep';
-            if (deepMode) {
-                this.resumeDeepScraping();
-                return;
-            }
-
             if (!PageDetector.isOnPeopleSearchPage()) {
                 console.warn('[LiSeSca] Resumed on wrong page. Finishing session with buffered data.');
                 UI.showStatus('Wrong page detected. Saving collected data...');
@@ -6780,31 +5864,24 @@ USER'S CRITERIA:
             }
 
             var aiEnabled = State.readPeopleAIEnabledFromUI();
-            var fullAIEnabled = State.readPeopleFullAIEnabledFromUI();
-
             if (!CONFIG.isPeopleAIConfigured()) {
                 aiEnabled = false;
-                fullAIEnabled = false;
             }
-
             State.savePeopleAIEnabled(aiEnabled);
-            State.savePeopleFullAIEnabled(fullAIEnabled);
 
             State.startSession(target, startPage, baseUrl, 'people');
             State.saveFormats(selectedFormats);
-            State.set(State.KEYS.DEEP_SCRAPE_MODE, aiEnabled ? 'deep' : 'normal');
-            State.set(State.KEYS.PROFILE_INDEX, 0);
-            State.set(State.KEYS.PROFILES_ON_PAGE, JSON.stringify([]));
 
             if (aiEnabled) {
-                this.deepScrapeCycle();
-            } else {
-                this.scrapeCycle();
+                AIClient.resetPeopleConversation();
             }
+
+            this.scrapeCycle();
         },
 
         /**
          * The core scraping cycle. Runs once per page.
+         * If AI is enabled, scores each profile and filters by score >= 3.
          */
         scrapeCycle: function() {
             var state = State.getScrapingState();
@@ -6816,6 +5893,12 @@ USER'S CRITERIA:
                 + ' (' + (pagesScraped + 1) + ' of ' + targetDisplay + ')';
 
             var self = this;
+            var aiEnabled = State.getPeopleAIEnabled() && AIClient.isPeopleConfigured();
+
+            // Reset AI conversation for each page (conversation history is lost on page reload)
+            if (aiEnabled) {
+                AIClient.resetPeopleConversation();
+            }
 
             Emulator.emulateHumanScan(statusPrefix).then(function() {
                 if (!State.isScraping()) {
@@ -6833,19 +5916,29 @@ USER'S CRITERIA:
                 console.log('[LiSeSca] Page ' + state.currentPage
                     + ': extracted ' + profiles.length + ' profiles.');
 
-                if (profiles.length > 0) {
-                    console.table(profiles.map(function(p) {
-                        return {
-                            name: p.fullName,
-                            degree: p.connectionDegree,
-                            description: p.description.substring(0, 50),
-                            location: p.location
-                        };
-                    }));
+                if (profiles.length === 0) {
+                    self.decideNextAction(0);
+                    return;
                 }
 
-                State.appendBuffer(profiles);
-                self.decideNextAction(profiles.length);
+                if (aiEnabled) {
+                    // Score profiles with AI
+                    return self.scoreProfiles(profiles, state);
+                } else {
+                    // No AI: save all profiles
+                    if (profiles.length > 0) {
+                        console.table(profiles.map(function(p) {
+                            return {
+                                name: p.fullName,
+                                degree: p.connectionDegree,
+                                description: (p.description || '').substring(0, 50),
+                                location: p.location
+                            };
+                        }));
+                    }
+                    State.appendBuffer(profiles);
+                    self.decideNextAction(profiles.length);
+                }
 
             }).catch(function(error) {
                 console.error('[LiSeSca] Scrape cycle error:', error);
@@ -6863,453 +5956,134 @@ USER'S CRITERIA:
         },
 
         /**
-         * Resume a deep people scraping session (profile visit or search page).
-         */
-        resumeDeepScraping: function() {
-            if (ProfileExtractor.isOnProfilePage()) {
-                console.log('[LiSeSca] Resuming deep scrape on profile page.');
-                this.handleProfileVisit();
-                return;
-            }
-
-            if (!PageDetector.isOnPeopleSearchPage()) {
-                console.warn('[LiSeSca] Deep scrape resumed on wrong page. Saving buffered data.');
-                UI.showStatus('Wrong page detected. Saving collected data...');
-                var buffer = State.getBuffer();
-                if (buffer.length > 0) {
-                    Output.downloadResults(buffer);
-                }
-                State.clear();
-                setTimeout(function() {
-                    UI.showIdleState();
-                }, 3000);
-                return;
-            }
-
-            this.deepScrapeCycle();
-        },
-
-        /**
-         * Deep scrape cycle for people search pages.
-         * Two-pass approach:
-         * 1. Triage all cards on the page (fast, reuses conversation)
-         * 2. Visit keep/maybe profiles one by one for extraction
-         */
-        deepScrapeCycle: function() {
-            var self = this;
-            var state = State.getScrapingState();
-            var pagesScraped = state.currentPage - state.startPage;
-            var targetDisplay = (state.targetPageCount >= 9999)
-                ? 'all' : state.targetPageCount.toString();
-
-            var statusPrefix = 'Scanning page ' + state.currentPage
-                + ' (' + (pagesScraped + 1) + ' of ' + targetDisplay + ')';
-
-            // Check if we already have triaged profiles (resuming after navigation)
-            var storedProfiles = State.getProfilesOnPage();
-            if (storedProfiles.length > 0) {
-                // Profiles already triaged, continue with profile visits
-                self.processNextProfile();
-                return;
-            }
-
-            Emulator.emulateHumanScan(statusPrefix).then(function() {
-                if (!State.isScraping()) {
-                    return null;
-                }
-                UI.showStatus('Extracting page ' + state.currentPage + '...');
-                return Extractor.extractCurrentPage();
-            }).then(function(profiles) {
-                if (!profiles) {
-                    return;
-                }
-
-                console.log('[LiSeSca] Page ' + state.currentPage
-                    + ': extracted ' + profiles.length + ' profiles.');
-
-                if (profiles.length === 0) {
-                    self.finishScraping();
-                    return;
-                }
-
-                // Start triage pass
-                var aiEnabled = State.getPeopleAIEnabled() && AIClient.isPeopleConfigured();
-                if (aiEnabled) {
-                    AIClient.resetPeopleConversation();
-                    return self.triageAllProfiles(profiles);
-                }
-
-                // No AI: mark all as keep and proceed
-                profiles.forEach(function(p) {
-                    p.aiDecision = 'keep';
-                    p.aiReason = 'AI disabled';
-                });
-                State.set(State.KEYS.PROFILES_ON_PAGE, JSON.stringify(profiles));
-                State.set(State.KEYS.PROFILE_INDEX, 0);
-                self.processNextProfile();
-            }).catch(function(error) {
-                console.error('[LiSeSca] Deep scrape cycle error:', error);
-                UI.showStatus('Error: ' + error.message);
-
-                var buffer = State.getBuffer();
-                if (buffer.length > 0) {
-                    Output.downloadResults(buffer);
-                }
-                State.clear();
-                setTimeout(function() {
-                    UI.showIdleState();
-                }, 5000);
-            });
-        },
-
-        /**
-         * Pass 1: Triage all profiles on the page before visiting any.
-         * Accumulates AI conversation for efficiency.
+         * Score all profiles on the page using AI.
+         * Only saves profiles with score >= 3.
+         * If AI fails, falls back to saving all profiles with "unavailable" rating.
          * @param {Array} profiles - Array of profile card data.
+         * @param {Object} state - Current scraping state.
          */
-        triageAllProfiles: function(profiles) {
+        scoreProfiles: function(profiles, state) {
             var self = this;
-            var state = State.getScrapingState();
+            var scoreIndex = 0;
             var pagesScraped = state.currentPage - state.startPage;
-            var triageIndex = 0;
+            var savedCount = 0;
+            var aiFailureCount = 0;
+            var consecutiveFailures = 0;
+            var aiDisabled = false; // Flag to disable AI after too many failures
 
-            function triageNext() {
+            function scoreNext() {
                 if (!State.isScraping()) {
                     self.finishScraping();
                     return;
                 }
 
-                if (triageIndex >= profiles.length) {
-                    // Triage complete, filter to keep/maybe and start profile visits
-                    var toVisit = profiles.filter(function(p) {
-                        return p.aiDecision === 'keep' || p.aiDecision === 'maybe';
-                    });
-
-                    console.log('[LiSeSca] Triage complete: ' + toVisit.length + '/'
-                        + profiles.length + ' profiles to visit.');
-
-                    State.set(State.KEYS.PROFILES_ON_PAGE, JSON.stringify(profiles));
-                    State.set(State.KEYS.PROFILE_INDEX, 0);
-
-                    if (toVisit.length === 0) {
-                        // No profiles passed triage, move to next page
-                        self.decideNextActionDeep();
-                        return;
+                if (scoreIndex >= profiles.length) {
+                    // Scoring complete
+                    console.log('[LiSeSca] Scoring complete: ' + savedCount + '/'
+                        + profiles.length + ' profiles saved.');
+                    if (aiFailureCount > 0) {
+                        console.log('[LiSeSca] AI failures: ' + aiFailureCount + ' profiles saved without rating.');
                     }
 
-                    self.processNextProfile();
+                    self.decideNextAction(profiles.length);
                     return;
                 }
 
-                var profile = profiles[triageIndex];
+                var profile = profiles[scoreIndex];
                 var statusMsg = 'Page ' + state.currentPage
                     + ' (' + (pagesScraped + 1) + ' of ' + state.targetPageCount + ')'
-                    + ' — Triage ' + (triageIndex + 1) + ' of ' + profiles.length;
+                    + ' — Scoring ' + (scoreIndex + 1) + ' of ' + profiles.length;
+
+                if (aiDisabled) {
+                    statusMsg += ' (AI unavailable)';
+                }
 
                 UI.showStatus(statusMsg);
                 UI.showAIStats(State.getAIPeopleEvaluated(), State.getAIPeopleAccepted(), '');
 
                 if (!profile || !profile.profileUrl) {
-                    console.warn('[LiSeSca] Profile missing URL, marking as reject.');
-                    profile.aiDecision = 'reject';
-                    profile.aiReason = 'No profile URL';
-                    triageIndex++;
-                    triageNext();
+                    console.warn('[LiSeSca] Profile missing URL, skipping.');
+                    scoreIndex++;
+                    scoreNext();
+                    return;
+                }
+
+                // If AI is disabled due to failures, save profile without rating
+                if (aiDisabled) {
+                    profile.aiScore = '';
+                    profile.aiLabel = 'AI unavailable';
+                    profile.aiReason = 'AI service not responding';
+                    State.appendBuffer([profile]);
+                    savedCount++;
+                    aiFailureCount++;
+                    scoreIndex++;
+                    // Continue without delay since no AI call
+                    scoreNext();
                     return;
                 }
 
                 var cardMarkdown = Extractor.formatCardForAI(profile);
 
-                AIClient.triagePeopleCard(cardMarkdown).then(function(result) {
+                AIClient.scorePeopleCard(cardMarkdown).then(function(result) {
                     if (!State.isScraping()) {
                         return;
                     }
 
-                    var decision = result.decision;
+                    var score = result.score;
+                    var label = result.label;
                     var reason = result.reason;
 
-                    profile.aiDecision = decision;
-                    profile.aiReason = reason;
+                    // Reset consecutive failures on success
+                    consecutiveFailures = 0;
 
                     State.incrementAIPeopleEvaluated();
+
+                    console.log('[LiSeSca] AI SCORE: ' + profile.fullName
+                        + ' — ' + score + '/5 (' + label + ') — ' + reason);
+
+                    // Save profile if score >= 3
+                    if (score >= 3) {
+                        profile.aiScore = score;
+                        profile.aiLabel = label;
+                        profile.aiReason = reason;
+                        State.appendBuffer([profile]);
+                        State.incrementAIPeopleAccepted();
+                        savedCount++;
+                    }
+
                     UI.showAIStats(State.getAIPeopleEvaluated(), State.getAIPeopleAccepted(), '');
 
-                    console.log('[LiSeSca] AI TRIAGE: ' + profile.fullName
-                        + ' — ' + decision + ' — ' + reason);
+                    scoreIndex++;
 
-                    triageIndex++;
-
-                    // Small delay between triage calls
+                    // Small delay between scoring calls
                     Emulator.randomDelay(200, 400).then(function() {
-                        triageNext();
+                        scoreNext();
                     });
                 }).catch(function(error) {
-                    console.error('[LiSeSca] Triage error for ' + profile.fullName + ':', error);
-                    // Fail-open: treat as keep
-                    profile.aiDecision = 'keep';
-                    profile.aiReason = 'Triage error';
-                    triageIndex++;
-                    triageNext();
+                    console.error('[LiSeSca] Scoring error for ' + profile.fullName + ':', error);
+
+                    consecutiveFailures++;
+                    aiFailureCount++;
+
+                    // After 3 consecutive failures, disable AI for remaining profiles on this page
+                    if (consecutiveFailures >= 3) {
+                        console.warn('[LiSeSca] AI disabled after ' + consecutiveFailures + ' consecutive failures. Saving remaining profiles without rating.');
+                        aiDisabled = true;
+                    }
+
+                    // Save profile with unavailable rating
+                    profile.aiScore = '';
+                    profile.aiLabel = 'AI unavailable';
+                    profile.aiReason = 'Scoring failed: ' + error.message;
+                    State.appendBuffer([profile]);
+                    savedCount++;
+
+                    scoreIndex++;
+                    scoreNext();
                 });
             }
 
-            triageNext();
-        },
-
-        /**
-         * Process the next profile in deep scrape mode (Pass 2).
-         * Triage is already done; this navigates to keep/maybe profiles.
-         */
-        processNextProfile: function() {
-            var self = this;
-
-            if (!State.isScraping()) {
-                console.log('[LiSeSca] Deep scraping stopped.');
-                self.finishScraping();
-                return;
-            }
-
-            var state = State.getScrapingState();
-            var profiles = State.getProfilesOnPage();
-            var profileIndex = State.get(State.KEYS.PROFILE_INDEX, 0);
-            var pagesScraped = state.currentPage - state.startPage;
-
-            // Find next profile that passed triage (keep or maybe)
-            while (profileIndex < profiles.length) {
-                var p = profiles[profileIndex];
-                if (p && (p.aiDecision === 'keep' || p.aiDecision === 'maybe')) {
-                    break;
-                }
-                // Skip rejected or invalid profiles
-                profileIndex++;
-            }
-
-            State.set(State.KEYS.PROFILE_INDEX, profileIndex);
-
-            if (profileIndex >= profiles.length) {
-                console.log('[LiSeSca] All profiles processed on page ' + state.currentPage);
-                self.decideNextActionDeep();
-                return;
-            }
-
-            var profile = profiles[profileIndex];
-
-            // Count how many keep/maybe profiles total
-            var toVisitCount = profiles.filter(function(p) {
-                return p && (p.aiDecision === 'keep' || p.aiDecision === 'maybe');
-            }).length;
-
-            // Count how many we've visited so far (index in keep/maybe list)
-            var visitedCount = profiles.slice(0, profileIndex).filter(function(p) {
-                return p && (p.aiDecision === 'keep' || p.aiDecision === 'maybe');
-            }).length;
-
-            var statusMsg = 'Page ' + state.currentPage
-                + ' (' + (pagesScraped + 1) + ' of ' + state.targetPageCount + ')'
-                + ' — Visiting ' + (visitedCount + 1) + ' of ' + toVisitCount;
-
-            UI.showStatus(statusMsg);
-
-            var aiEnabled = State.getPeopleAIEnabled() && AIClient.isPeopleConfigured();
-            if (aiEnabled) {
-                UI.showAIStats(State.getAIPeopleEvaluated(), State.getAIPeopleAccepted(), '');
-            }
-
-            if (!profile.profileUrl) {
-                console.warn('[LiSeSca] Profile missing URL, skipping.');
-                State.set(State.KEYS.PROFILE_INDEX, profileIndex + 1);
-                Emulator.randomDelay(300, 600).then(function() {
-                    self.processNextProfile();
-                });
-                return;
-            }
-
-            // Navigate to profile page
-            State.set(State.KEYS.CURRENT_PROFILE_URL, profile.profileUrl);
-
-            var decisionLabel = profile.aiDecision === 'keep' ? 'Keep' : 'Maybe';
-            UI.showStatus(statusMsg + ' — ' + decisionLabel);
-
-            console.log('[LiSeSca] Visiting profile: ' + profile.fullName
-                + ' (' + profile.aiDecision + ')');
-
-            window.location.href = profile.profileUrl;
-        },
-
-        /**
-         * Handle a profile visit in deep scrape mode.
-         * Extracts full profile data and returns to search results.
-         */
-        handleProfileVisit: function() {
-            var self = this;
-            State.getScrapingState();
-            var profiles = State.getProfilesOnPage();
-            var profileIndex = State.get(State.KEYS.PROFILE_INDEX, 0);
-            var profile = profiles[profileIndex];
-
-            if (!profile) {
-                console.warn('[LiSeSca] No profile data found for current index.');
-                this.returnToSearchPage();
-                return;
-            }
-
-            // Count keep/maybe profiles for accurate progress display
-            var toVisitCount = profiles.filter(function(p) {
-                return p && (p.aiDecision === 'keep' || p.aiDecision === 'maybe');
-            }).length;
-            var visitedCount = profiles.slice(0, profileIndex).filter(function(p) {
-                return p && (p.aiDecision === 'keep' || p.aiDecision === 'maybe');
-            }).length;
-
-            var statusMsg = 'Profile ' + (visitedCount + 1) + ' of ' + toVisitCount;
-            UI.showStatus(statusMsg + ' — Loading profile...');
-
-            ProfileExtractor.waitForProfileLoad().then(function() {
-                if (!State.isScraping()) {
-                    return null;
-                }
-                ProfileExtractor.clickShowMore();
-                if (ProfileExtractor.isRestrictedProfile()) {
-                    return { restricted: true };
-                }
-                return ProfileExtractor.extractFullProfile();
-            }).then(function(fullProfile) {
-                if (!State.isScraping()) {
-                    return null;
-                }
-
-                if (!fullProfile || fullProfile.restricted) {
-                    console.warn('[LiSeSca] Restricted or unavailable profile: ' + profile.profileUrl);
-                    return 'skip';
-                }
-
-                var mergedProfile = self.mergeProfileData(profile, fullProfile);
-                var decision = profile.aiDecision || 'keep';
-                var aiEnabled = State.getPeopleAIEnabled() && AIClient.isPeopleConfigured();
-                var fullAIEnabled = State.getPeopleFullAIEnabled();
-
-                if (decision === 'maybe' && aiEnabled && fullAIEnabled) {
-                    var profileMarkdown = ProfileExtractor.formatProfileForAI(mergedProfile);
-                    UI.showStatus(statusMsg + ' — AI: Full evaluation...');
-                    return AIClient.evaluateFullProfile(profileMarkdown).then(function(evalResult) {
-                        if (!State.isScraping()) {
-                            return null;
-                        }
-
-                        if (evalResult.accept) {
-                            console.log('[LiSeSca] AI accepted profile after full review: '
-                                + mergedProfile.fullName + ' - ' + evalResult.reason);
-                            State.incrementAIPeopleAccepted();
-                            UI.showAIStats(State.getAIPeopleEvaluated(), State.getAIPeopleAccepted(), '');
-                            State.appendBuffer([mergedProfile]);
-                        } else {
-                            console.log('[LiSeSca] AI FULL REJECT: ' + mergedProfile.fullName);
-                            console.log('  Profile: ' + mergedProfile.profileUrl);
-                            console.log('  Reason: ' + evalResult.reason);
-                        }
-                        return 'done';
-                    });
-                }
-
-                // Keep or Maybe (without full AI evaluation)
-                if (aiEnabled) {
-                    State.incrementAIPeopleAccepted();
-                    UI.showAIStats(State.getAIPeopleEvaluated(), State.getAIPeopleAccepted(), '');
-                    console.log('[LiSeSca] AI accepted profile: ' + mergedProfile.fullName
-                        + ' — triage=' + decision);
-                }
-                State.appendBuffer([mergedProfile]);
-                return 'done';
-            }).then(function(result) {
-                if (!State.isScraping()) {
-                    return;
-                }
-                if (result === null) {
-                    return;
-                }
-
-                State.set(State.KEYS.PROFILE_INDEX, profileIndex + 1);
-                State.set(State.KEYS.CURRENT_PROFILE_URL, '');
-
-                var delayMin = result === 'skip' ? 1500 : 3000;
-                var delayMax = result === 'skip' ? 3000 : 8000;
-                return Emulator.randomDelay(delayMin, delayMax).then(function() {
-                    self.returnToSearchPage();
-                });
-            }).catch(function(error) {
-                console.error('[LiSeSca] Error handling profile visit:', error);
-                State.set(State.KEYS.PROFILE_INDEX, profileIndex + 1);
-                State.set(State.KEYS.CURRENT_PROFILE_URL, '');
-                Emulator.randomDelay(1500, 3000).then(function() {
-                    self.returnToSearchPage();
-                });
-            });
-        },
-
-        /**
-         * Merge card data with full profile data.
-         * @param {Object} cardProfile - Profile data from search card.
-         * @param {Object} fullProfile - Full profile data from profile page.
-         * @returns {Object}
-         */
-        mergeProfileData: function(cardProfile, fullProfile) {
-            return {
-                fullName: fullProfile.fullName || cardProfile.fullName,
-                headline: fullProfile.headline || cardProfile.description || '',
-                description: cardProfile.description || '',
-                location: fullProfile.location || cardProfile.location || '',
-                profileUrl: fullProfile.profileUrl || cardProfile.profileUrl || '',
-                connectionDegree: cardProfile.connectionDegree || 0,
-                profileAbout: fullProfile.profileAbout || '',
-                currentRole: fullProfile.currentRole || null,
-                pastRoles: fullProfile.pastRoles || [],
-                aiDecision: cardProfile.aiDecision || '',
-                aiReason: cardProfile.aiReason || ''
-            };
-        },
-
-        /**
-         * Navigate back to the search results page.
-         */
-        returnToSearchPage: function() {
-            var page = State.get(State.KEYS.CURRENT_PAGE, 1);
-            UI.showStatus('Returning to search results...');
-            Paginator.navigateToPage(page);
-        },
-
-        /**
-         * Decide next action after finishing profiles on a page (deep mode).
-         */
-        decideNextActionDeep: function() {
-            var state = State.getScrapingState();
-            var pagesScraped = state.currentPage - state.startPage + 1;
-
-            if (state.profilesOnPage.length === 0) {
-                console.log('[LiSeSca] No results on page ' + state.currentPage + '. End of results.');
-                this.finishScraping();
-                return;
-            }
-
-            if (pagesScraped >= state.targetPageCount) {
-                console.log('[LiSeSca] Reached target of ' + state.targetPageCount + ' pages.');
-                this.finishScraping();
-                return;
-            }
-
-            if (!State.isScraping()) {
-                this.finishScraping();
-                return;
-            }
-
-            State.advancePage();
-            var nextPage = State.get(State.KEYS.CURRENT_PAGE, 1);
-            State.set(State.KEYS.PROFILE_INDEX, 0);
-            State.set(State.KEYS.PROFILES_ON_PAGE, JSON.stringify([]));
-
-            UI.showStatus('Moving to page ' + nextPage + '...');
-            setTimeout(function() {
-                Paginator.navigateToPage(nextPage);
-            }, Emulator.getRandomInt(1000, 2500));
+            scoreNext();
         },
 
         /**
@@ -7356,10 +6130,12 @@ USER'S CRITERIA:
             var aiEnabled = State.getPeopleAIEnabled();
             var aiEvaluated = State.getAIPeopleEvaluated();
             var aiAccepted = State.getAIPeopleAccepted();
+            var state = State.getScrapingState();
+            var pagesScraped = state.currentPage - state.startPage + 1;
 
             console.log('[LiSeSca] Scraping finished! Total: ' + totalProfiles + ' profiles.');
             if (aiEnabled && aiEvaluated > 0) {
-                console.log('[LiSeSca] AI stats: ' + aiAccepted + '/' + aiEvaluated + ' accepted.');
+                console.log('[LiSeSca] AI stats: ' + aiAccepted + '/' + aiEvaluated + ' saved (score >= 3).');
             }
 
             UI.hideAIStats();
@@ -7367,14 +6143,21 @@ USER'S CRITERIA:
             if (totalProfiles > 0) {
                 UI.showStatus('Done! ' + totalProfiles + ' profiles scraped. Downloading...');
                 Output.downloadResults(buffer);
+                State.clear();
+                setTimeout(function() {
+                    UI.showIdleState();
+                }, 5000);
+            } else if (aiEnabled && aiEvaluated > 0) {
+                // AI filtering was active but no profiles matched - show special notification
+                State.clear();
+                UI.showNoResults(aiEvaluated, pagesScraped, 'profile');
             } else {
                 UI.showStatus('No profiles found.');
+                State.clear();
+                setTimeout(function() {
+                    UI.showIdleState();
+                }, 5000);
             }
-
-            State.clear();
-            setTimeout(function() {
-                UI.showIdleState();
-            }, 5000);
         },
 
         /**
