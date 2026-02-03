@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.16
+// @version      0.4.0
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -15,6 +15,7 @@
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @connect      api.anthropic.com
+// @connect      api.moonshot.ai
 // @require      https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
 // @require      https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js
 // @run-at       document-idle
@@ -27,7 +28,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.3.16',
+        VERSION: '0.4.0',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -37,8 +38,15 @@
 
         // AI filtering configuration (stored separately)
         ANTHROPIC_API_KEY: '',  // User's Anthropic API key
+        MOONSHOT_API_KEY: '',   // User's Moonshot API key
+        AI_MODEL: '',           // Selected model ID (provider derived from model prefix)
         JOB_CRITERIA: '',       // User's job search criteria (free-form text)
         PEOPLE_CRITERIA: '',    // User's people search criteria (free-form text)
+        CACHED_MODELS: {        // Cached model lists for dropdown
+            anthropic: [],
+            moonshot: [],
+            lastFetch: { anthropic: 0, moonshot: 0 }
+        },
 
         /**
          * Load user-saved configuration from persistent storage.
@@ -81,11 +89,20 @@
                     if (aiParsed.ANTHROPIC_API_KEY !== undefined) {
                         this.ANTHROPIC_API_KEY = aiParsed.ANTHROPIC_API_KEY;
                     }
+                    if (aiParsed.MOONSHOT_API_KEY !== undefined) {
+                        this.MOONSHOT_API_KEY = aiParsed.MOONSHOT_API_KEY;
+                    }
+                    if (aiParsed.AI_MODEL !== undefined) {
+                        this.AI_MODEL = aiParsed.AI_MODEL;
+                    }
                     if (aiParsed.JOB_CRITERIA !== undefined) {
                         this.JOB_CRITERIA = aiParsed.JOB_CRITERIA;
                     }
                     if (aiParsed.PEOPLE_CRITERIA !== undefined) {
                         this.PEOPLE_CRITERIA = aiParsed.PEOPLE_CRITERIA;
+                    }
+                    if (aiParsed.CACHED_MODELS !== undefined) {
+                        this.CACHED_MODELS = aiParsed.CACHED_MODELS;
                     }
                 } catch (error) {
                     console.warn('[LiSeSca] Failed to parse saved AI config:', error);
@@ -99,8 +116,9 @@
                 MAX_JOB_REVIEW_TIME: this.MAX_JOB_REVIEW_TIME,
                 MIN_JOB_PAUSE: this.MIN_JOB_PAUSE,
                 MAX_JOB_PAUSE: this.MAX_JOB_PAUSE,
-                AI_CONFIGURED: !!(this.ANTHROPIC_API_KEY && this.JOB_CRITERIA),
-                PEOPLE_AI_CONFIGURED: !!(this.ANTHROPIC_API_KEY && this.PEOPLE_CRITERIA)
+                AI_MODEL: this.AI_MODEL,
+                AI_CONFIGURED: this.isAIConfigured(),
+                PEOPLE_AI_CONFIGURED: this.isPeopleAIConfigured()
             });
         },
 
@@ -126,27 +144,104 @@
         saveAIConfig: function() {
             var aiConfigData = JSON.stringify({
                 ANTHROPIC_API_KEY: this.ANTHROPIC_API_KEY,
+                MOONSHOT_API_KEY: this.MOONSHOT_API_KEY,
+                AI_MODEL: this.AI_MODEL,
                 JOB_CRITERIA: this.JOB_CRITERIA,
-                PEOPLE_CRITERIA: this.PEOPLE_CRITERIA
+                PEOPLE_CRITERIA: this.PEOPLE_CRITERIA,
+                CACHED_MODELS: this.CACHED_MODELS
             });
             GM_setValue('lisesca_ai_config', aiConfigData);
             console.log('[LiSeSca] AI config saved.');
         },
 
         /**
+         * Determine the provider for a given model ID based on its prefix.
+         * @param {string} modelId - The model identifier.
+         * @returns {string|null} 'anthropic', 'moonshot', or null if unknown.
+         */
+        getProviderForModel: function(modelId) {
+            if (!modelId) {
+                return null;
+            }
+            // Anthropic models start with 'claude'
+            if (modelId.startsWith('claude')) {
+                return 'anthropic';
+            }
+            // Moonshot models start with 'kimi' or 'moonshot'
+            if (modelId.startsWith('kimi') || modelId.startsWith('moonshot')) {
+                return 'moonshot';
+            }
+            return null;
+        },
+
+        /**
+         * Get the API key for the currently selected model's provider.
+         * @returns {string} The API key, or empty string if not available.
+         */
+        getActiveAPIKey: function() {
+            var provider = this.getProviderForModel(this.AI_MODEL);
+            if (provider === 'anthropic') {
+                return this.ANTHROPIC_API_KEY || '';
+            }
+            if (provider === 'moonshot') {
+                return this.MOONSHOT_API_KEY || '';
+            }
+            // Fallback: if no model selected, return Anthropic key for backward compatibility
+            return this.ANTHROPIC_API_KEY || '';
+        },
+
+        /**
+         * Check if any API key is available.
+         * @returns {boolean} True if at least one API key is set.
+         */
+        hasAnyAPIKey: function() {
+            return !!(this.ANTHROPIC_API_KEY || this.MOONSHOT_API_KEY);
+        },
+
+        /**
          * Check if AI filtering is properly configured.
-         * @returns {boolean} True if both API key and criteria are set.
+         * Requires: a selected model with valid API key + job criteria.
+         * @returns {boolean} True if configured properly.
          */
         isAIConfigured: function() {
-            return !!(this.ANTHROPIC_API_KEY && this.JOB_CRITERIA);
+            if (!this.JOB_CRITERIA) {
+                return false;
+            }
+            // If model is selected, check that provider's key
+            if (this.AI_MODEL) {
+                var provider = this.getProviderForModel(this.AI_MODEL);
+                if (provider === 'anthropic') {
+                    return !!this.ANTHROPIC_API_KEY;
+                }
+                if (provider === 'moonshot') {
+                    return !!this.MOONSHOT_API_KEY;
+                }
+            }
+            // Backward compatibility: if no model selected, check Anthropic key
+            return !!this.ANTHROPIC_API_KEY;
         },
 
         /**
          * Check if People AI filtering is properly configured.
-         * @returns {boolean} True if both API key and people criteria are set.
+         * Requires: a selected model with valid API key + people criteria.
+         * @returns {boolean} True if configured properly.
          */
         isPeopleAIConfigured: function() {
-            return !!(this.ANTHROPIC_API_KEY && this.PEOPLE_CRITERIA);
+            if (!this.PEOPLE_CRITERIA) {
+                return false;
+            }
+            // If model is selected, check that provider's key
+            if (this.AI_MODEL) {
+                var provider = this.getProviderForModel(this.AI_MODEL);
+                if (provider === 'anthropic') {
+                    return !!this.ANTHROPIC_API_KEY;
+                }
+                if (provider === 'moonshot') {
+                    return !!this.MOONSHOT_API_KEY;
+                }
+            }
+            // Backward compatibility: if no model selected, check Anthropic key
+            return !!this.ANTHROPIC_API_KEY;
         }
     };
 
@@ -174,6 +269,7 @@
             JOB_IDS_ON_PAGE: 'lisesca_jobIdsOnPage',  // JSON array of job IDs for current page
             JOB_TOTAL: 'lisesca_jobTotal',            // total jobs count for "All" mode
             // AI evaluation statistics
+            JOBS_PROCESSED: 'lisesca_jobsProcessed',        // count of all jobs processed (saved + skipped)
             AI_JOBS_EVALUATED: 'lisesca_aiJobsEvaluated',  // count of jobs evaluated by AI
             AI_JOBS_ACCEPTED: 'lisesca_aiJobsAccepted',    // count of jobs accepted by AI
             AI_PEOPLE_EVALUATED: 'lisesca_aiPeopleEvaluated', // count of people evaluated by AI
@@ -254,7 +350,8 @@
             this.set(this.KEYS.JOB_INDEX, 0);
             this.set(this.KEYS.JOB_IDS_ON_PAGE, JSON.stringify([]));
             this.set(this.KEYS.JOB_TOTAL, 0);
-            // Reset AI evaluation counters
+            // Reset processing and AI evaluation counters
+            this.set(this.KEYS.JOBS_PROCESSED, 0);
             this.set(this.KEYS.AI_JOBS_EVALUATED, 0);
             this.set(this.KEYS.AI_JOBS_ACCEPTED, 0);
             this.set(this.KEYS.AI_PEOPLE_EVALUATED, 0);
@@ -438,6 +535,22 @@
         },
 
         /**
+         * Get the count of all jobs processed (saved + skipped) in this session.
+         * @returns {number}
+         */
+        getJobsProcessed: function() {
+            return this.get(this.KEYS.JOBS_PROCESSED, 0);
+        },
+
+        /**
+         * Increment the jobs processed counter.
+         */
+        incrementJobsProcessed: function() {
+            var current = this.get(this.KEYS.JOBS_PROCESSED, 0);
+            this.set(this.KEYS.JOBS_PROCESSED, current + 1);
+        },
+
+        /**
          * Get the count of jobs evaluated by AI in this session.
          * @returns {number}
          */
@@ -552,6 +665,7 @@
             GM_deleteValue(this.KEYS.JOB_INDEX);
             GM_deleteValue(this.KEYS.JOB_IDS_ON_PAGE);
             GM_deleteValue(this.KEYS.JOB_TOTAL);
+            GM_deleteValue(this.KEYS.JOBS_PROCESSED);
             GM_deleteValue(this.KEYS.AI_JOBS_EVALUATED);
             GM_deleteValue(this.KEYS.AI_JOBS_ACCEPTED);
             GM_deleteValue(this.KEYS.AI_PEOPLE_EVALUATED);
@@ -697,9 +811,10 @@
     };
 
     // ===== AI CLIENT =====
-    // Handles communication with Anthropic's Claude API for job filtering.
+    // Handles communication with AI providers (Anthropic Claude and Moonshot Kimi) for job/people filtering.
     // Uses GM_xmlhttpRequest for cross-origin API calls (Tampermonkey requirement).
     // Maintains conversation history per page to reduce token usage.
+    // Supports multiple providers through a unified abstraction layer.
 
 
     /** System prompt that instructs Claude how to evaluate jobs (basic mode) */
@@ -779,7 +894,8 @@ USER'S CRITERIA:
                 },
                 reason: {
                     type: 'string',
-                    description: 'Brief explanation for the decision (required for reject, optional for keep/maybe)'
+                    maxLength: 100,
+                    description: 'Very brief reason, max 100 chars (e.g. "wrong industry" or "good title match")'
                 }
             },
             required: ['decision', 'reason']
@@ -799,7 +915,8 @@ USER'S CRITERIA:
                 },
                 reason: {
                     type: 'string',
-                    description: 'Brief explanation for the decision (especially important for rejections)'
+                    maxLength: 150,
+                    description: 'Concise reason, max 150 chars (e.g. "requires 10+ years Java, I have 5")'
                 }
             },
             required: ['accept', 'reason']
@@ -821,12 +938,340 @@ USER'S CRITERIA:
                 },
                 reason: {
                     type: 'string',
-                    description: 'Brief explanation for the score'
+                    maxLength: 200,
+                    description: 'Brief reason for the score, max 200 chars. This is saved in output.'
                 }
             },
             required: ['score', 'reason']
         }
     };
+
+    // ===== PROVIDER CONFIGURATIONS =====
+    // Each provider has its own API format, authentication, and response parsing.
+
+    const PROVIDERS = {
+        anthropic: {
+            name: 'Anthropic',
+            baseUrl: 'https://api.anthropic.com/v1',
+            chatEndpoint: '/messages',
+            modelsEndpoint: '/models',
+            defaultModel: 'claude-sonnet-4-5-20250929',
+
+            /**
+             * Generate authentication headers for Anthropic API.
+             * @param {string} apiKey - The Anthropic API key.
+             * @returns {Object} Headers object.
+             */
+            authHeader: function(apiKey) {
+                return {
+                    'Content-Type': 'application/json',
+                    'x-api-key': apiKey,
+                    'anthropic-version': '2023-06-01'
+                };
+            },
+
+            /**
+             * Format a chat completion request for Anthropic API.
+             * @param {Array} messages - The conversation messages.
+             * @param {Array} tools - Tool definitions.
+             * @param {Object} toolChoice - Tool choice specification.
+             * @param {string} systemPrompt - System prompt.
+             * @param {number} maxTokens - Maximum tokens.
+             * @param {string} model - Model ID.
+             * @returns {Object} Request body.
+             */
+            formatRequest: function(messages, tools, toolChoice, systemPrompt, maxTokens, model) {
+                return {
+                    model: model,
+                    max_tokens: maxTokens,
+                    system: systemPrompt,
+                    tools: tools,
+                    tool_choice: toolChoice,
+                    messages: messages
+                };
+            },
+
+            /**
+             * Parse tool call from Anthropic response.
+             * @param {Object} data - Response data.
+             * @returns {Object|null} Tool call info {toolName, toolId, input} or null.
+             */
+            parseToolResponse: function(data) {
+                if (data.content && Array.isArray(data.content)) {
+                    for (var i = 0; i < data.content.length; i++) {
+                        if (data.content[i].type === 'tool_use') {
+                            return {
+                                toolName: data.content[i].name,
+                                toolId: data.content[i].id,
+                                input: data.content[i].input
+                            };
+                        }
+                    }
+                }
+                return null;
+            },
+
+            /**
+             * Format tool result message for Anthropic.
+             * @param {string} toolId - The tool call ID.
+             * @param {string} content - The result content.
+             * @returns {Object} Message object.
+             */
+            formatToolResult: function(toolId, content) {
+                return {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'tool_result',
+                            tool_use_id: toolId,
+                            content: content
+                        }
+                    ]
+                };
+            },
+
+            /**
+             * Format assistant message with tool use for history.
+             * @param {Object} toolCall - The tool call info.
+             * @returns {Object} Message object.
+             */
+            formatAssistantToolUse: function(toolCall) {
+                return {
+                    role: 'assistant',
+                    content: [
+                        {
+                            type: 'tool_use',
+                            id: toolCall.toolId,
+                            name: toolCall.toolName,
+                            input: toolCall.input
+                        }
+                    ]
+                };
+            },
+
+            /**
+             * Parse models from Anthropic API response.
+             * @param {Object} data - Response data.
+             * @returns {Array} Array of {id, name} objects.
+             */
+            parseModels: function(data) {
+                if (data.data && Array.isArray(data.data)) {
+                    return data.data.map(function(m) {
+                        return { id: m.id, name: m.display_name || m.id };
+                    });
+                }
+                return [];
+            }
+        },
+
+        moonshot: {
+            name: 'Moonshot',
+            baseUrl: 'https://api.moonshot.ai/v1',
+            chatEndpoint: '/chat/completions',
+            modelsEndpoint: '/models',
+            defaultModel: 'kimi-k2-turbo-preview',
+
+            /**
+             * Generate authentication headers for Moonshot API.
+             * @param {string} apiKey - The Moonshot API key.
+             * @returns {Object} Headers object.
+             */
+            authHeader: function(apiKey) {
+                return {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + apiKey
+                };
+            },
+
+            /**
+             * Format a chat completion request for Moonshot API (OpenAI compatible).
+             * @param {Array} messages - The conversation messages (Anthropic format).
+             * @param {Array} tools - Tool definitions (Anthropic format).
+             * @param {Object} toolChoice - Tool choice specification.
+             * @param {string} systemPrompt - System prompt.
+             * @param {number} maxTokens - Maximum tokens.
+             * @param {string} model - Model ID.
+             * @returns {Object} Request body.
+             */
+            formatRequest: function(messages, tools, toolChoice, systemPrompt, maxTokens, model) {
+                // Build messages array with system message first
+                var formattedMessages = [];
+                if (systemPrompt) {
+                    formattedMessages.push({ role: 'system', content: systemPrompt });
+                }
+
+                // Convert each message to OpenAI format
+                for (var i = 0; i < messages.length; i++) {
+                    var converted = convertMessageToOpenAI(messages[i]);
+                    if (converted) {
+                        formattedMessages.push(converted);
+                    }
+                }
+
+                // Convert tools to OpenAI function format
+                var functions = tools.map(function(tool) {
+                    return {
+                        type: 'function',
+                        function: {
+                            name: tool.name,
+                            description: tool.description,
+                            parameters: tool.input_schema
+                        }
+                    };
+                });
+
+                var request = {
+                    model: model,
+                    max_tokens: maxTokens,
+                    messages: formattedMessages,
+                    tools: functions
+                    // Temperature omitted - let each model use its API default
+                };
+
+                // Tool choice formatting for OpenAI
+                if (toolChoice && toolChoice.type === 'tool') {
+                    request.tool_choice = {
+                        type: 'function',
+                        function: { name: toolChoice.name }
+                    };
+
+                    // kimi-k2.5 has thinking enabled by default, which is incompatible
+                    // with tool_choice. Disable thinking when forcing tool use.
+                    if (model === 'kimi-k2.5') {
+                        request.thinking = { type: 'disabled' };
+                    }
+                }
+
+                return request;
+            },
+
+            /**
+             * Parse tool call from Moonshot/OpenAI response.
+             * @param {Object} data - Response data.
+             * @returns {Object|null} Tool call info {toolName, toolId, input} or null.
+             */
+            parseToolResponse: function(data) {
+                if (data.choices && data.choices[0] && data.choices[0].message) {
+                    var msg = data.choices[0].message;
+                    if (msg.tool_calls && msg.tool_calls.length > 0) {
+                        var toolCall = msg.tool_calls[0];
+                        var args = {};
+                        try {
+                            args = JSON.parse(toolCall.function.arguments);
+                        } catch (e) {
+                            console.warn('[LiSeSca] Failed to parse tool arguments:', e);
+                        }
+                        return {
+                            toolName: toolCall.function.name,
+                            toolId: toolCall.id,
+                            input: args
+                        };
+                    }
+                }
+                return null;
+            },
+
+            /**
+             * Format tool result message for OpenAI/Moonshot.
+             * @param {string} toolId - The tool call ID.
+             * @param {string} content - The result content.
+             * @returns {Object} Message object.
+             */
+            formatToolResult: function(toolId, content) {
+                return {
+                    role: 'tool',
+                    tool_call_id: toolId,
+                    content: content
+                };
+            },
+
+            /**
+             * Format assistant message with tool use for history (OpenAI format).
+             * @param {Object} toolCall - The tool call info.
+             * @returns {Object} Message object.
+             */
+            formatAssistantToolUse: function(toolCall) {
+                return {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                        {
+                            id: toolCall.toolId,
+                            type: 'function',
+                            function: {
+                                name: toolCall.toolName,
+                                arguments: JSON.stringify(toolCall.input)
+                            }
+                        }
+                    ]
+                };
+            },
+
+            /**
+             * Parse models from Moonshot/OpenAI API response.
+             * @param {Object} data - Response data.
+             * @returns {Array} Array of {id, name} objects.
+             */
+            parseModels: function(data) {
+                if (data.data && Array.isArray(data.data)) {
+                    return data.data.map(function(m) {
+                        return { id: m.id, name: m.id };
+                    });
+                }
+                return [];
+            }
+        }
+    };
+
+    /**
+     * Convert an Anthropic-format message to OpenAI format.
+     * Handles tool_result and tool_use content blocks.
+     * @param {Object} msg - Anthropic format message.
+     * @returns {Object|null} OpenAI format message or null if conversion fails.
+     */
+    function convertMessageToOpenAI(msg) {
+        // Simple text message
+        if (typeof msg.content === 'string') {
+            return { role: msg.role, content: msg.content };
+        }
+
+        // Handle array content (tool_use or tool_result)
+        if (Array.isArray(msg.content)) {
+            for (var i = 0; i < msg.content.length; i++) {
+                var block = msg.content[i];
+
+                // Tool result from user
+                if (block.type === 'tool_result') {
+                    return {
+                        role: 'tool',
+                        tool_call_id: block.tool_use_id,
+                        content: block.content
+                    };
+                }
+
+                // Tool use from assistant
+                if (block.type === 'tool_use') {
+                    return {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: block.id,
+                                type: 'function',
+                                function: {
+                                    name: block.name,
+                                    arguments: JSON.stringify(block.input)
+                                }
+                            }
+                        ]
+                    };
+                }
+            }
+        }
+
+        // Fallback: return as-is (might not work, but better than null)
+        return msg;
+    }
 
     const AIClient = {
         /** Conversation history for the current page */
@@ -846,18 +1291,148 @@ USER'S CRITERIA:
 
         /**
          * Check if the AI client is properly configured with API key and criteria.
-         * @returns {boolean} True if both API key and criteria are set.
+         * @returns {boolean} True if configured properly.
          */
         isConfigured: function() {
-            return !!(CONFIG.ANTHROPIC_API_KEY && CONFIG.JOB_CRITERIA);
+            return CONFIG.isAIConfigured();
         },
 
         /**
          * Check if People AI client is properly configured.
-         * @returns {boolean} True if both API key and people criteria are set.
+         * @returns {boolean} True if configured properly.
          */
         isPeopleConfigured: function() {
-            return !!(CONFIG.ANTHROPIC_API_KEY && CONFIG.PEOPLE_CRITERIA);
+            return CONFIG.isPeopleAIConfigured();
+        },
+
+        /**
+         * Get the current provider configuration based on selected model.
+         * @returns {Object} Provider configuration object.
+         */
+        getProvider: function() {
+            var providerName = CONFIG.getProviderForModel(CONFIG.AI_MODEL);
+            if (providerName && PROVIDERS[providerName]) {
+                return PROVIDERS[providerName];
+            }
+            // Default to Anthropic for backward compatibility
+            return PROVIDERS.anthropic;
+        },
+
+        /**
+         * Get the model to use for API calls.
+         * @returns {string} Model ID.
+         */
+        getModel: function() {
+            if (CONFIG.AI_MODEL) {
+                return CONFIG.AI_MODEL;
+            }
+            // Default model based on which API key is available
+            if (CONFIG.ANTHROPIC_API_KEY) {
+                return PROVIDERS.anthropic.defaultModel;
+            }
+            if (CONFIG.MOONSHOT_API_KEY) {
+                return PROVIDERS.moonshot.defaultModel;
+            }
+            return PROVIDERS.anthropic.defaultModel;
+        },
+
+        /**
+         * Fetch available models from a specific provider.
+         * @param {string} providerName - 'anthropic' or 'moonshot'.
+         * @param {string} apiKey - The API key for the provider.
+         * @returns {Promise<Array>} Array of model objects {id, name}.
+         */
+        fetchModels: function(providerName, apiKey) {
+            var provider = PROVIDERS[providerName];
+
+            if (!provider) {
+                return Promise.reject(new Error('Unknown provider: ' + providerName));
+            }
+
+            if (!apiKey) {
+                return Promise.reject(new Error('API key required'));
+            }
+
+            var url = provider.baseUrl + provider.modelsEndpoint;
+            var headers = provider.authHeader(apiKey);
+
+            return new Promise(function(resolve, reject) {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: url,
+                    headers: headers,
+                    onload: function(response) {
+                        if (response.status !== 200) {
+                            reject(new Error('API error: ' + response.status));
+                            return;
+                        }
+                        try {
+                            var data = JSON.parse(response.responseText);
+                            var models = provider.parseModels(data);
+                            resolve(models);
+                        } catch (error) {
+                            reject(new Error('Failed to parse models response: ' + error.message));
+                        }
+                    },
+                    onerror: function(error) {
+                        reject(new Error('Network error'));
+                    },
+                    ontimeout: function() {
+                        reject(new Error('Request timeout'));
+                    },
+                    timeout: 15000
+                });
+            });
+        },
+
+        /**
+         * Fetch models from all providers with valid API keys.
+         * Updates CONFIG.CACHED_MODELS with results.
+         * @returns {Promise<Object>} Object with {anthropic: [], moonshot: []} arrays.
+         */
+        fetchAllModels: function() {
+            var self = this;
+            var promises = [];
+            var results = {
+                anthropic: [],
+                moonshot: []
+            };
+
+            // Fetch from Anthropic if key is present
+            if (CONFIG.ANTHROPIC_API_KEY) {
+                promises.push(
+                    self.fetchModels('anthropic', CONFIG.ANTHROPIC_API_KEY)
+                        .then(function(models) {
+                            results.anthropic = models;
+                            CONFIG.CACHED_MODELS.anthropic = models;
+                            CONFIG.CACHED_MODELS.lastFetch.anthropic = Date.now();
+                        })
+                        .catch(function(error) {
+                            console.warn('[LiSeSca] Failed to fetch Anthropic models:', error);
+                            results.anthropic = [];
+                        })
+                );
+            }
+
+            // Fetch from Moonshot if key is present
+            if (CONFIG.MOONSHOT_API_KEY) {
+                promises.push(
+                    self.fetchModels('moonshot', CONFIG.MOONSHOT_API_KEY)
+                        .then(function(models) {
+                            results.moonshot = models;
+                            CONFIG.CACHED_MODELS.moonshot = models;
+                            CONFIG.CACHED_MODELS.lastFetch.moonshot = Date.now();
+                        })
+                        .catch(function(error) {
+                            console.warn('[LiSeSca] Failed to fetch Moonshot models:', error);
+                            results.moonshot = [];
+                        })
+                );
+            }
+
+            return Promise.all(promises).then(function() {
+                return results;
+            });
         },
 
         /**
@@ -997,39 +1572,41 @@ USER'S CRITERIA:
         },
 
         /**
-         * Send a job card to Claude for evaluation.
+         * Send a job card for evaluation using the configured provider.
          * @param {string} cardMarkdown - The job card formatted as Markdown.
          * @returns {Promise<boolean>} True if the job should be downloaded.
          */
         sendJobForEvaluation: function(cardMarkdown) {
             var self = this;
+            var provider = this.getProvider();
+            var model = this.getModel();
+            var apiKey = CONFIG.getActiveAPIKey();
 
             // Add the job card to the conversation
             var messagesWithJob = this.conversationHistory.concat([
                 { role: 'user', content: cardMarkdown }
             ]);
 
-            var requestBody = {
-                model: 'claude-sonnet-4-5-20250929',
-                max_tokens: 100,
-                system: SYSTEM_PROMPT,
-                tools: [JOB_EVALUATION_TOOL],
-                tool_choice: { type: 'tool', name: 'job_evaluation' },
-                messages: messagesWithJob
-            };
+            var requestBody = provider.formatRequest(
+                messagesWithJob,
+                [JOB_EVALUATION_TOOL],
+                { type: 'tool', name: 'job_evaluation' },
+                SYSTEM_PROMPT,
+                100,
+                model
+            );
+
+            var url = provider.baseUrl + provider.chatEndpoint;
+            var headers = provider.authHeader(apiKey);
 
             return new Promise(function(resolve, reject) {
                 GM_xmlhttpRequest({
                     method: 'POST',
-                    url: 'https://api.anthropic.com/v1/messages',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                        'anthropic-version': '2023-06-01'
-                    },
+                    url: url,
+                    headers: headers,
                     data: JSON.stringify(requestBody),
                     onload: function(response) {
-                        self.handleApiResponse(response, cardMarkdown, resolve, reject);
+                        self.handleApiResponse(response, cardMarkdown, resolve, reject, provider);
                     },
                     onerror: function(error) {
                         console.error('[LiSeSca] AI API request failed:', error);
@@ -1039,7 +1616,7 @@ USER'S CRITERIA:
                         console.error('[LiSeSca] AI API request timed out');
                         reject(new Error('Request timeout'));
                     },
-                    timeout: 30000 // 30 second timeout
+                    timeout: 30000
                 });
             });
         },
@@ -1050,8 +1627,11 @@ USER'S CRITERIA:
          * @param {string} cardMarkdown - The original job card (for logging).
          * @param {Function} resolve - Promise resolve function.
          * @param {Function} reject - Promise reject function.
+         * @param {Object} provider - The provider configuration (optional, defaults to current).
          */
-        handleApiResponse: function(response, cardMarkdown, resolve, reject) {
+        handleApiResponse: function(response, cardMarkdown, resolve, reject, provider) {
+            provider = provider || this.getProvider();
+
             if (response.status !== 200) {
                 console.error('[LiSeSca] AI API error:', response.status, response.responseText);
                 // Fail-open: allow the job on API errors
@@ -1062,30 +1642,29 @@ USER'S CRITERIA:
             try {
                 var data = JSON.parse(response.responseText);
 
-                // Find the tool_use content block
-                var toolUse = null;
-                if (data.content && Array.isArray(data.content)) {
-                    for (var i = 0; i < data.content.length; i++) {
-                        if (data.content[i].type === 'tool_use') {
-                            toolUse = data.content[i];
-                            break;
-                        }
-                    }
-                }
+                // Use provider's parsing method
+                var toolCall = provider.parseToolResponse(data);
 
-                if (!toolUse || toolUse.name !== 'job_evaluation') {
+                if (!toolCall || toolCall.toolName !== 'job_evaluation') {
                     console.warn('[LiSeSca] Unexpected AI response format, allowing job.');
                     resolve(true);
                     return;
                 }
 
-                var shouldDownload = toolUse.input.download === true;
+                var shouldDownload = toolCall.input.download === true;
 
-                // Update conversation history with this exchange
+                // Update conversation history with this exchange (in Anthropic format for internal consistency)
                 this.conversationHistory.push({ role: 'user', content: cardMarkdown });
                 this.conversationHistory.push({
                     role: 'assistant',
-                    content: [toolUse]
+                    content: [
+                        {
+                            type: 'tool_use',
+                            id: toolCall.toolId,
+                            name: toolCall.toolName,
+                            input: toolCall.input
+                        }
+                    ]
                 });
                 // Add tool result to complete the exchange
                 this.conversationHistory.push({
@@ -1093,7 +1672,7 @@ USER'S CRITERIA:
                     content: [
                         {
                             type: 'tool_result',
-                            tool_use_id: toolUse.id,
+                            tool_use_id: toolCall.toolId,
                             content: shouldDownload ? 'Job queued for download.' : 'Job skipped.'
                         }
                     ]
@@ -1133,38 +1712,40 @@ USER'S CRITERIA:
         },
 
         /**
-         * Send a job card to Claude for three-tier triage.
+         * Send a job card for three-tier triage using the configured provider.
          * @param {string} cardMarkdown - The job card formatted as Markdown.
          * @returns {Promise<{decision: string, reason: string}>} Decision object with reason.
          */
         sendCardForTriage: function(cardMarkdown) {
             var self = this;
+            var provider = this.getProvider();
+            var model = this.getModel();
+            var apiKey = CONFIG.getActiveAPIKey();
 
             var messagesWithJob = this.conversationHistory.concat([
                 { role: 'user', content: cardMarkdown }
             ]);
 
-            var requestBody = {
-                model: 'claude-sonnet-4-5-20250929',
-                max_tokens: 200,  // Increased for reason text
-                system: FULL_AI_SYSTEM_PROMPT,
-                tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
-                tool_choice: { type: 'tool', name: 'card_triage' },
-                messages: messagesWithJob
-            };
+            var requestBody = provider.formatRequest(
+                messagesWithJob,
+                [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
+                { type: 'tool', name: 'card_triage' },
+                FULL_AI_SYSTEM_PROMPT,
+                200,
+                model
+            );
+
+            var url = provider.baseUrl + provider.chatEndpoint;
+            var headers = provider.authHeader(apiKey);
 
             return new Promise(function(resolve, reject) {
                 GM_xmlhttpRequest({
                     method: 'POST',
-                    url: 'https://api.anthropic.com/v1/messages',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                        'anthropic-version': '2023-06-01'
-                    },
+                    url: url,
+                    headers: headers,
                     data: JSON.stringify(requestBody),
                     onload: function(response) {
-                        self.handleTriageResponse(response, cardMarkdown, resolve, reject);
+                        self.handleTriageResponse(response, cardMarkdown, resolve, reject, provider);
                     },
                     onerror: function(error) {
                         console.error('[LiSeSca] AI triage request failed:', error);
@@ -1185,8 +1766,11 @@ USER'S CRITERIA:
          * @param {string} cardMarkdown - The original job card.
          * @param {Function} resolve - Promise resolve function.
          * @param {Function} reject - Promise reject function.
+         * @param {Object} provider - The provider configuration.
          */
-        handleTriageResponse: function(response, cardMarkdown, resolve, reject) {
+        handleTriageResponse: function(response, cardMarkdown, resolve, reject, provider) {
+            provider = provider || this.getProvider();
+
             if (response.status !== 200) {
                 console.error('[LiSeSca] AI triage API error:', response.status, response.responseText);
                 resolve({ decision: 'keep', reason: 'API error ' + response.status }); // Fail-open
@@ -1196,24 +1780,17 @@ USER'S CRITERIA:
             try {
                 var data = JSON.parse(response.responseText);
 
-                var toolUse = null;
-                if (data.content && Array.isArray(data.content)) {
-                    for (var i = 0; i < data.content.length; i++) {
-                        if (data.content[i].type === 'tool_use') {
-                            toolUse = data.content[i];
-                            break;
-                        }
-                    }
-                }
+                // Use provider's parsing method
+                var toolCall = provider.parseToolResponse(data);
 
-                if (!toolUse || toolUse.name !== 'card_triage') {
+                if (!toolCall || toolCall.toolName !== 'card_triage') {
                     console.warn('[LiSeSca] Unexpected triage response format, returning "keep".');
                     resolve({ decision: 'keep', reason: 'Unexpected response format' });
                     return;
                 }
 
-                var decision = toolUse.input.decision;
-                var reason = toolUse.input.reason || '(no reason provided)';
+                var decision = toolCall.input.decision;
+                var reason = toolCall.input.reason || '(no reason provided)';
 
                 if (decision !== 'reject' && decision !== 'keep' && decision !== 'maybe') {
                     console.warn('[LiSeSca] Invalid triage decision "' + decision + '", returning "keep".');
@@ -1221,11 +1798,18 @@ USER'S CRITERIA:
                     reason = 'Invalid decision value: ' + decision;
                 }
 
-                // Update conversation history
+                // Update conversation history (in Anthropic format for internal consistency)
                 this.conversationHistory.push({ role: 'user', content: cardMarkdown });
                 this.conversationHistory.push({
                     role: 'assistant',
-                    content: [toolUse]
+                    content: [
+                        {
+                            type: 'tool_use',
+                            id: toolCall.toolId,
+                            name: toolCall.toolName,
+                            input: toolCall.input
+                        }
+                    ]
                 });
 
                 var resultMessage = '';
@@ -1242,7 +1826,7 @@ USER'S CRITERIA:
                     content: [
                         {
                             type: 'tool_result',
-                            tool_use_id: toolUse.id,
+                            tool_use_id: toolCall.toolId,
                             content: resultMessage
                         }
                     ]
@@ -1275,12 +1859,15 @@ USER'S CRITERIA:
         },
 
         /**
-         * Send full job details to Claude for final evaluation.
+         * Send full job details for final evaluation using the configured provider.
          * @param {string} fullJobMarkdown - The complete job formatted as Markdown.
          * @returns {Promise<{accept: boolean, reason: string}>} Decision object with reason.
          */
         sendFullJobForEvaluation: function(fullJobMarkdown) {
             var self = this;
+            var provider = this.getProvider();
+            var model = this.getModel();
+            var apiKey = CONFIG.getActiveAPIKey();
 
             var contextMessage = 'Here are the full job details for your final decision:\n\n' + fullJobMarkdown;
 
@@ -1288,27 +1875,26 @@ USER'S CRITERIA:
                 { role: 'user', content: contextMessage }
             ]);
 
-            var requestBody = {
-                model: 'claude-sonnet-4-5-20250929',
-                max_tokens: 300,  // Increased for detailed reason text
-                system: FULL_AI_SYSTEM_PROMPT,
-                tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
-                tool_choice: { type: 'tool', name: 'full_evaluation' },
-                messages: messagesWithJob
-            };
+            var requestBody = provider.formatRequest(
+                messagesWithJob,
+                [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
+                { type: 'tool', name: 'full_evaluation' },
+                FULL_AI_SYSTEM_PROMPT,
+                500,
+                model
+            );
+
+            var url = provider.baseUrl + provider.chatEndpoint;
+            var headers = provider.authHeader(apiKey);
 
             return new Promise(function(resolve, reject) {
                 GM_xmlhttpRequest({
                     method: 'POST',
-                    url: 'https://api.anthropic.com/v1/messages',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                        'anthropic-version': '2023-06-01'
-                    },
+                    url: url,
+                    headers: headers,
                     data: JSON.stringify(requestBody),
                     onload: function(response) {
-                        self.handleFullEvaluationResponse(response, contextMessage, resolve, reject);
+                        self.handleFullEvaluationResponse(response, contextMessage, resolve, reject, provider);
                     },
                     onerror: function(error) {
                         console.error('[LiSeSca] AI full evaluation request failed:', error);
@@ -1318,7 +1904,7 @@ USER'S CRITERIA:
                         console.error('[LiSeSca] AI full evaluation request timed out');
                         reject(new Error('Request timeout'));
                     },
-                    timeout: 60000 // 60 second timeout for full job evaluation
+                    timeout: 60000
                 });
             });
         },
@@ -1329,8 +1915,11 @@ USER'S CRITERIA:
          * @param {string} contextMessage - The message sent with full job details.
          * @param {Function} resolve - Promise resolve function.
          * @param {Function} reject - Promise reject function.
+         * @param {Object} provider - The provider configuration.
          */
-        handleFullEvaluationResponse: function(response, contextMessage, resolve, reject) {
+        handleFullEvaluationResponse: function(response, contextMessage, resolve, reject, provider) {
+            provider = provider || this.getProvider();
+
             if (response.status !== 200) {
                 console.error('[LiSeSca] AI full evaluation API error:', response.status, response.responseText);
                 resolve({ accept: true, reason: 'API error ' + response.status }); // Fail-open
@@ -1340,37 +1929,37 @@ USER'S CRITERIA:
             try {
                 var data = JSON.parse(response.responseText);
 
-                var toolUse = null;
-                if (data.content && Array.isArray(data.content)) {
-                    for (var i = 0; i < data.content.length; i++) {
-                        if (data.content[i].type === 'tool_use') {
-                            toolUse = data.content[i];
-                            break;
-                        }
-                    }
-                }
+                // Use provider's parsing method
+                var toolCall = provider.parseToolResponse(data);
 
-                if (!toolUse || toolUse.name !== 'full_evaluation') {
+                if (!toolCall || toolCall.toolName !== 'full_evaluation') {
                     console.warn('[LiSeSca] Unexpected full evaluation response, accepting job.');
                     resolve({ accept: true, reason: 'Unexpected response format' });
                     return;
                 }
 
-                var accept = toolUse.input.accept === true;
-                var reason = toolUse.input.reason || '(no reason provided)';
+                var accept = toolCall.input.accept === true;
+                var reason = toolCall.input.reason || '(no reason provided)';
 
-                // Update conversation history
+                // Update conversation history (in Anthropic format for internal consistency)
                 this.conversationHistory.push({ role: 'user', content: contextMessage });
                 this.conversationHistory.push({
                     role: 'assistant',
-                    content: [toolUse]
+                    content: [
+                        {
+                            type: 'tool_use',
+                            id: toolCall.toolId,
+                            name: toolCall.toolName,
+                            input: toolCall.input
+                        }
+                    ]
                 });
                 this.conversationHistory.push({
                     role: 'user',
                     content: [
                         {
                             type: 'tool_result',
-                            tool_use_id: toolUse.id,
+                            tool_use_id: toolCall.toolId,
                             content: accept ? 'Job accepted and saved.' : 'Job rejected after full review.'
                         }
                     ]
@@ -1425,39 +2014,41 @@ USER'S CRITERIA:
         },
 
         /**
-         * Send a person card to Claude for scoring.
+         * Send a person card for scoring using the configured provider.
          * @param {string} cardMarkdown - The person card formatted as Markdown.
          * @returns {Promise<{score: number, label: string, reason: string}>}
          */
         sendPeopleCardForScoring: function(cardMarkdown) {
             var self = this;
+            var provider = this.getProvider();
+            var model = this.getModel();
+            var apiKey = CONFIG.getActiveAPIKey();
 
             // Criteria is in the system prompt, conversation history has prior cards
             var messagesWithCard = this.peopleConversationHistory.concat([
                 { role: 'user', content: cardMarkdown }
             ]);
 
-            var requestBody = {
-                model: 'claude-sonnet-4-5-20250929',
-                max_tokens: 200,
-                system: PEOPLE_SCORE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
-                tools: [PEOPLE_SCORE_TOOL],
-                tool_choice: { type: 'tool', name: 'people_score' },
-                messages: messagesWithCard
-            };
+            var requestBody = provider.formatRequest(
+                messagesWithCard,
+                [PEOPLE_SCORE_TOOL],
+                { type: 'tool', name: 'people_score' },
+                PEOPLE_SCORE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
+                300,
+                model
+            );
+
+            var url = provider.baseUrl + provider.chatEndpoint;
+            var headers = provider.authHeader(apiKey);
 
             return new Promise(function(resolve, reject) {
                 GM_xmlhttpRequest({
                     method: 'POST',
-                    url: 'https://api.anthropic.com/v1/messages',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                        'anthropic-version': '2023-06-01'
-                    },
+                    url: url,
+                    headers: headers,
                     data: JSON.stringify(requestBody),
                     onload: function(response) {
-                        self.handlePeopleScoreResponse(response, cardMarkdown, resolve, reject);
+                        self.handlePeopleScoreResponse(response, cardMarkdown, resolve, reject, provider);
                     },
                     onerror: function(error) {
                         console.error('[LiSeSca] People AI scoring request failed:', error);
@@ -1478,9 +2069,11 @@ USER'S CRITERIA:
          * @param {string} cardMarkdown - The original person card.
          * @param {Function} resolve - Promise resolve function.
          * @param {Function} reject - Promise reject function.
+         * @param {Object} provider - The provider configuration.
          */
-        handlePeopleScoreResponse: function(response, cardMarkdown, resolve, reject) {
+        handlePeopleScoreResponse: function(response, cardMarkdown, resolve, reject, provider) {
             var self = this;
+            provider = provider || this.getProvider();
 
             if (response.status !== 200) {
                 console.error('[LiSeSca] People AI scoring API error:', response.status, response.responseText);
@@ -1490,24 +2083,18 @@ USER'S CRITERIA:
 
             try {
                 var data = JSON.parse(response.responseText);
-                var toolUse = null;
-                if (data.content && Array.isArray(data.content)) {
-                    for (var i = 0; i < data.content.length; i++) {
-                        if (data.content[i].type === 'tool_use') {
-                            toolUse = data.content[i];
-                            break;
-                        }
-                    }
-                }
 
-                if (!toolUse || toolUse.name !== 'people_score') {
+                // Use provider's parsing method
+                var toolCall = provider.parseToolResponse(data);
+
+                if (!toolCall || toolCall.toolName !== 'people_score') {
                     console.warn('[LiSeSca] Unexpected people scoring response format, returning score 3.');
                     resolve({ score: 3, label: 'Moderate interest', reason: 'Unexpected response format' });
                     return;
                 }
 
-                var score = toolUse.input.score;
-                var reason = toolUse.input.reason || '(no reason provided)';
+                var score = toolCall.input.score;
+                var reason = toolCall.input.reason || '(no reason provided)';
 
                 // Validate score is in range
                 if (typeof score !== 'number' || score < 0 || score > 5) {
@@ -1518,11 +2105,18 @@ USER'S CRITERIA:
 
                 var label = self.scoreToLabel(score);
 
-                // Update conversation history
+                // Update conversation history (in Anthropic format for internal consistency)
                 this.peopleConversationHistory.push({ role: 'user', content: cardMarkdown });
                 this.peopleConversationHistory.push({
                     role: 'assistant',
-                    content: [toolUse]
+                    content: [
+                        {
+                            type: 'tool_use',
+                            id: toolCall.toolId,
+                            name: toolCall.toolName,
+                            input: toolCall.input
+                        }
+                    ]
                 });
 
                 var resultMessage = score >= 3 ? 'Person scored ' + score + '/5, saved.' : 'Person scored ' + score + '/5, skipped.';
@@ -1532,7 +2126,7 @@ USER'S CRITERIA:
                     content: [
                         {
                             type: 'tool_result',
-                            tool_use_id: toolUse.id,
+                            tool_use_id: toolCall.toolId,
                             content: resultMessage
                         }
                     ]
@@ -2175,6 +2769,66 @@ USER'S CRITERIA:
             .lisesca-ai-config-row textarea:focus {
                 outline: none;
                 border-color: #58a6ff;
+            }
+
+            /* Model selection dropdown and refresh button */
+            .lisesca-model-container {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+
+            .lisesca-model-select {
+                flex: 1;
+                background: #0d1117;
+                color: #e1e4e8;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 8px 10px;
+                font-size: 13px;
+                box-sizing: border-box;
+                cursor: pointer;
+            }
+            .lisesca-model-select:focus {
+                outline: none;
+                border-color: #58a6ff;
+            }
+            .lisesca-model-select:disabled {
+                background: #161b22;
+                color: #6e7681;
+                cursor: not-allowed;
+            }
+            .lisesca-model-select optgroup {
+                background: #0d1117;
+                color: #8b949e;
+                font-weight: 600;
+                font-style: normal;
+            }
+            .lisesca-model-select option {
+                background: #0d1117;
+                color: #e1e4e8;
+                padding: 4px;
+            }
+
+            .lisesca-model-refresh {
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 8px 12px;
+                font-size: 12px;
+                font-weight: 500;
+                cursor: pointer;
+                white-space: nowrap;
+                transition: background 0.15s;
+            }
+            .lisesca-model-refresh:hover {
+                background: #30363d;
+            }
+            .lisesca-model-refresh:disabled {
+                background: #161b22;
+                color: #6e7681;
+                cursor: not-allowed;
             }
 
             .lisesca-ai-config-row .lisesca-hint {
@@ -3147,6 +3801,62 @@ USER'S CRITERIA:
             apiKeyRow.appendChild(apiKeyInput);
             apiKeyRow.appendChild(apiKeyHint);
 
+            // Moonshot API Key row
+            var moonshotKeyRow = document.createElement('div');
+            moonshotKeyRow.className = 'lisesca-ai-config-row';
+
+            var moonshotKeyLabel = document.createElement('label');
+            moonshotKeyLabel.textContent = 'Moonshot API Key:';
+            moonshotKeyLabel.htmlFor = 'lisesca-moonshot-api-key';
+
+            var moonshotKeyInput = document.createElement('input');
+            moonshotKeyInput.type = 'password';
+            moonshotKeyInput.id = 'lisesca-moonshot-api-key';
+            moonshotKeyInput.placeholder = 'sk-...';
+            moonshotKeyInput.value = CONFIG.MOONSHOT_API_KEY || '';
+
+            var moonshotKeyHint = document.createElement('div');
+            moonshotKeyHint.className = 'lisesca-hint';
+            moonshotKeyHint.textContent = 'Get your API key from platform.moonshot.ai';
+
+            moonshotKeyRow.appendChild(moonshotKeyLabel);
+            moonshotKeyRow.appendChild(moonshotKeyInput);
+            moonshotKeyRow.appendChild(moonshotKeyHint);
+
+            // Model selection row
+            var modelRow = document.createElement('div');
+            modelRow.className = 'lisesca-ai-config-row';
+
+            var modelLabel = document.createElement('label');
+            modelLabel.textContent = 'Model:';
+            modelLabel.htmlFor = 'lisesca-ai-model';
+
+            var modelContainer = document.createElement('div');
+            modelContainer.className = 'lisesca-model-container';
+
+            var modelSelect = document.createElement('select');
+            modelSelect.id = 'lisesca-ai-model';
+            modelSelect.className = 'lisesca-model-select';
+
+            var refreshBtn = document.createElement('button');
+            refreshBtn.type = 'button';
+            refreshBtn.className = 'lisesca-model-refresh';
+            refreshBtn.textContent = 'Refresh';
+            refreshBtn.addEventListener('click', function() {
+                UI.refreshModels();
+            });
+
+            modelContainer.appendChild(modelSelect);
+            modelContainer.appendChild(refreshBtn);
+
+            var modelHint = document.createElement('div');
+            modelHint.className = 'lisesca-hint';
+            modelHint.textContent = 'Select AI model. Click Refresh to fetch available models.';
+
+            modelRow.appendChild(modelLabel);
+            modelRow.appendChild(modelContainer);
+            modelRow.appendChild(modelHint);
+
             // Job Criteria row
             var criteriaRow = document.createElement('div');
             criteriaRow.className = 'lisesca-ai-config-row';
@@ -3220,6 +3930,8 @@ USER'S CRITERIA:
             // Assemble panel
             panel.appendChild(title);
             panel.appendChild(apiKeyRow);
+            panel.appendChild(moonshotKeyRow);
+            panel.appendChild(modelRow);
             panel.appendChild(criteriaRow);
             panel.appendChild(peopleCriteriaRow);
             panel.appendChild(errorDiv);
@@ -3242,9 +3954,11 @@ USER'S CRITERIA:
          */
         showAIConfig: function() {
             document.getElementById('lisesca-ai-api-key').value = CONFIG.ANTHROPIC_API_KEY || '';
+            document.getElementById('lisesca-moonshot-api-key').value = CONFIG.MOONSHOT_API_KEY || '';
             document.getElementById('lisesca-ai-criteria').value = CONFIG.JOB_CRITERIA || '';
             document.getElementById('lisesca-ai-people-criteria').value = CONFIG.PEOPLE_CRITERIA || '';
             document.getElementById('lisesca-ai-config-error').textContent = '';
+            this.populateModelDropdown();
             this.aiConfigOverlay.classList.add('lisesca-visible');
         },
 
@@ -3256,28 +3970,189 @@ USER'S CRITERIA:
         },
 
         /**
+         * Populate the model dropdown with cached models, grouped by provider.
+         * Models are shown in optgroups by provider. Only providers with valid
+         * API keys are shown.
+         */
+        populateModelDropdown: function() {
+            var select = document.getElementById('lisesca-ai-model');
+            var anthropicKey = document.getElementById('lisesca-ai-api-key').value.trim();
+            var moonshotKey = document.getElementById('lisesca-moonshot-api-key').value.trim();
+
+            // Clear existing options
+            select.innerHTML = '';
+
+            // Check if we have any API keys
+            if (!anthropicKey && !moonshotKey) {
+                var placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = '(Enter API key first)';
+                placeholder.disabled = true;
+                placeholder.selected = true;
+                select.appendChild(placeholder);
+                select.disabled = true;
+                return;
+            }
+
+            select.disabled = false;
+
+            // Add default empty option
+            var defaultOpt = document.createElement('option');
+            defaultOpt.value = '';
+            defaultOpt.textContent = '-- Select Model --';
+            select.appendChild(defaultOpt);
+
+            // Add Anthropic models if key is present
+            if (anthropicKey && CONFIG.CACHED_MODELS.anthropic && CONFIG.CACHED_MODELS.anthropic.length > 0) {
+                var anthropicGroup = document.createElement('optgroup');
+                anthropicGroup.label = 'Anthropic';
+                CONFIG.CACHED_MODELS.anthropic.forEach(function(model) {
+                    var opt = document.createElement('option');
+                    opt.value = model.id;
+                    opt.textContent = model.name || model.id;
+                    anthropicGroup.appendChild(opt);
+                });
+                select.appendChild(anthropicGroup);
+            }
+
+            // Add Moonshot models if key is present
+            if (moonshotKey && CONFIG.CACHED_MODELS.moonshot && CONFIG.CACHED_MODELS.moonshot.length > 0) {
+                var moonshotGroup = document.createElement('optgroup');
+                moonshotGroup.label = 'Moonshot';
+                CONFIG.CACHED_MODELS.moonshot.forEach(function(model) {
+                    var opt = document.createElement('option');
+                    opt.value = model.id;
+                    opt.textContent = model.name || model.id;
+                    moonshotGroup.appendChild(opt);
+                });
+                select.appendChild(moonshotGroup);
+            }
+
+            // If no cached models, show hint
+            if (select.options.length === 1) {
+                var hint = document.createElement('option');
+                hint.value = '';
+                hint.textContent = '(Click Refresh to fetch models)';
+                hint.disabled = true;
+                select.appendChild(hint);
+            }
+
+            // Set selected value
+            if (CONFIG.AI_MODEL) {
+                select.value = CONFIG.AI_MODEL;
+            }
+        },
+
+        /**
+         * Fetch available models from all providers with valid API keys.
+         * Updates the cached models and repopulates the dropdown.
+         */
+        refreshModels: function() {
+            var self = this;
+            var anthropicKey = document.getElementById('lisesca-ai-api-key').value.trim();
+            var moonshotKey = document.getElementById('lisesca-moonshot-api-key').value.trim();
+            var refreshBtn = document.querySelector('.lisesca-model-refresh');
+            var errorDiv = document.getElementById('lisesca-ai-config-error');
+
+            if (!anthropicKey && !moonshotKey) {
+                errorDiv.textContent = 'Enter at least one API key to fetch models.';
+                return;
+            }
+
+            // Disable refresh button and show loading state
+            refreshBtn.disabled = true;
+            refreshBtn.textContent = 'Loading...';
+            errorDiv.textContent = '';
+
+            // Temporarily update CONFIG with current key values for fetching
+            var originalAnthropicKey = CONFIG.ANTHROPIC_API_KEY;
+            var originalMoonshotKey = CONFIG.MOONSHOT_API_KEY;
+            CONFIG.ANTHROPIC_API_KEY = anthropicKey;
+            CONFIG.MOONSHOT_API_KEY = moonshotKey;
+
+            AIClient.fetchAllModels().then(function(results) {
+                // Update cached models
+                if (results.anthropic) {
+                    CONFIG.CACHED_MODELS.anthropic = results.anthropic;
+                    CONFIG.CACHED_MODELS.lastFetch.anthropic = Date.now();
+                }
+                if (results.moonshot) {
+                    CONFIG.CACHED_MODELS.moonshot = results.moonshot;
+                    CONFIG.CACHED_MODELS.lastFetch.moonshot = Date.now();
+                }
+
+                // Save cache to persistent storage
+                CONFIG.saveAIConfig();
+
+                // Repopulate dropdown
+                self.populateModelDropdown();
+
+                // Show success message
+                var count = (results.anthropic ? results.anthropic.length : 0)
+                    + (results.moonshot ? results.moonshot.length : 0);
+                console.log('[LiSeSca] Fetched ' + count + ' models from providers');
+
+            }).catch(function(error) {
+                console.error('[LiSeSca] Error fetching models:', error);
+                errorDiv.textContent = 'Error fetching models: ' + error.message;
+
+                // Restore original keys on error
+                CONFIG.ANTHROPIC_API_KEY = originalAnthropicKey;
+                CONFIG.MOONSHOT_API_KEY = originalMoonshotKey;
+
+            }).finally(function() {
+                // Re-enable refresh button
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = 'Refresh';
+            });
+        },
+
+        /**
          * Validate and save AI configuration.
          */
         saveAIConfig: function() {
             var errorDiv = document.getElementById('lisesca-ai-config-error');
-            var apiKey = document.getElementById('lisesca-ai-api-key').value.trim();
+            var anthropicKey = document.getElementById('lisesca-ai-api-key').value.trim();
+            var moonshotKey = document.getElementById('lisesca-moonshot-api-key').value.trim();
+            var selectedModel = document.getElementById('lisesca-ai-model').value;
             var criteria = document.getElementById('lisesca-ai-criteria').value.trim();
             var peopleCriteria = document.getElementById('lisesca-ai-people-criteria').value.trim();
 
-            // API key is required if any criteria is set
-            if (!apiKey && (criteria || peopleCriteria)) {
-                errorDiv.textContent = 'Please enter your API key to enable AI filtering.';
+            // At least one API key is required if any criteria is set
+            if (!anthropicKey && !moonshotKey && (criteria || peopleCriteria)) {
+                errorDiv.textContent = 'Please enter at least one API key to enable AI filtering.';
                 return;
             }
 
-            // Basic API key format validation
-            if (apiKey && !apiKey.startsWith('sk-ant-')) {
-                errorDiv.textContent = 'API key should start with "sk-ant-"';
+            // Basic API key format validation for Anthropic
+            if (anthropicKey && !anthropicKey.startsWith('sk-ant-')) {
+                errorDiv.textContent = 'Anthropic API key should start with "sk-ant-"';
                 return;
+            }
+
+            // Basic API key format validation for Moonshot
+            if (moonshotKey && !moonshotKey.startsWith('sk-')) {
+                errorDiv.textContent = 'Moonshot API key should start with "sk-"';
+                return;
+            }
+
+            // Validate that selected model's provider has a key
+            if (selectedModel) {
+                var provider = CONFIG.getProviderForModel(selectedModel);
+                if (provider === 'anthropic' && !anthropicKey) {
+                    errorDiv.textContent = 'Anthropic API key is required for the selected model.';
+                    return;
+                }
+                if (provider === 'moonshot' && !moonshotKey) {
+                    errorDiv.textContent = 'Moonshot API key is required for the selected model.';
+                    return;
+                }
             }
 
             // Save to CONFIG
-            CONFIG.ANTHROPIC_API_KEY = apiKey;
+            CONFIG.ANTHROPIC_API_KEY = anthropicKey;
+            CONFIG.MOONSHOT_API_KEY = moonshotKey;
+            CONFIG.AI_MODEL = selectedModel;
             CONFIG.JOB_CRITERIA = criteria;
             CONFIG.PEOPLE_CRITERIA = peopleCriteria;
             CONFIG.saveAIConfig();
@@ -3286,8 +4161,9 @@ USER'S CRITERIA:
             this.updateAIToggleState();
             this.updatePeopleAIToggleState();
 
-            console.log('[LiSeSca] AI config saved. Job configured: '
-                + CONFIG.isAIConfigured() + ', People configured: ' + CONFIG.isPeopleAIConfigured());
+            console.log('[LiSeSca] AI config saved. Model: ' + selectedModel
+                + ', Job configured: ' + CONFIG.isAIConfigured()
+                + ', People configured: ' + CONFIG.isPeopleAIConfigured());
             this.hideAIConfig();
         },
 
@@ -5297,7 +6173,9 @@ USER'S CRITERIA:
 
             var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
             if (totalKnown > 0) {
-                UI.showProgress('Progress: (' + state.scrapedBuffer.length + '/' + totalKnown + ')');
+                var processed = State.getJobsProcessed();
+                var saved = state.scrapedBuffer.length;
+                UI.showProgress('Progress: ' + processed + '/' + totalKnown + ' (' + saved + ' saved)');
             } else {
                 UI.showProgress('');
             }
@@ -5377,11 +6255,16 @@ USER'S CRITERIA:
                 + ' — Job ' + (jobIndex + 1) + ' of ' + totalOnPage;
             var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
             if (totalKnown > 0) {
-                UI.showProgress('Progress: (' + state.scrapedBuffer.length + '/' + totalKnown + ')');
+                var processed = State.getJobsProcessed();
+                var saved = state.scrapedBuffer.length;
+                UI.showProgress('Progress: ' + processed + '/' + totalKnown + ' (' + saved + ' saved)');
             } else {
                 UI.showProgress('');
             }
             UI.showStatus(statusMsg);
+
+            // Increment processed counter for this job
+            State.incrementJobsProcessed();
 
             // Show AI stats if AI filtering is active
             var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();

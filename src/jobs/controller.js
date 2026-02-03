@@ -117,7 +117,9 @@ export const JobController = {
 
         var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
         if (totalKnown > 0) {
-            UI.showProgress('Progress: (' + state.scrapedBuffer.length + '/' + totalKnown + ')');
+            var processed = State.getJobsProcessed();
+            var saved = state.scrapedBuffer.length;
+            UI.showProgress('Progress: ' + processed + '/' + totalKnown + ' (' + saved + ' saved)');
         } else {
             UI.showProgress('');
         }
@@ -197,11 +199,16 @@ export const JobController = {
             + ' — Job ' + (jobIndex + 1) + ' of ' + totalOnPage;
         var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
         if (totalKnown > 0) {
-            UI.showProgress('Progress: (' + state.scrapedBuffer.length + '/' + totalKnown + ')');
+            var processed = State.getJobsProcessed();
+            var saved = state.scrapedBuffer.length;
+            UI.showProgress('Progress: ' + processed + '/' + totalKnown + ' (' + saved + ' saved)');
         } else {
             UI.showProgress('');
         }
         UI.showStatus(statusMsg);
+
+        // Increment processed counter for this job
+        State.incrementJobsProcessed();
 
         // Show AI stats if AI filtering is active
         var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();

@@ -1,7 +1,8 @@
 // ===== AI CLIENT =====
-// Handles communication with Anthropic's Claude API for job filtering.
+// Handles communication with AI providers (Anthropic Claude and Moonshot Kimi) for job/people filtering.
 // Uses GM_xmlhttpRequest for cross-origin API calls (Tampermonkey requirement).
 // Maintains conversation history per page to reduce token usage.
+// Supports multiple providers through a unified abstraction layer.
 
 import { CONFIG } from './config.js';
 
@@ -82,7 +83,8 @@ const CARD_TRIAGE_TOOL = {
             },
             reason: {
                 type: 'string',
-                description: 'Brief explanation for the decision (required for reject, optional for keep/maybe)'
+                maxLength: 100,
+                description: 'Very brief reason, max 100 chars (e.g. "wrong industry" or "good title match")'
             }
         },
         required: ['decision', 'reason']
@@ -102,7 +104,8 @@ const FULL_EVALUATION_TOOL = {
             },
             reason: {
                 type: 'string',
-                description: 'Brief explanation for the decision (especially important for rejections)'
+                maxLength: 150,
+                description: 'Concise reason, max 150 chars (e.g. "requires 10+ years Java, I have 5")'
             }
         },
         required: ['accept', 'reason']
@@ -124,12 +127,340 @@ const PEOPLE_SCORE_TOOL = {
             },
             reason: {
                 type: 'string',
-                description: 'Brief explanation for the score'
+                maxLength: 200,
+                description: 'Brief reason for the score, max 200 chars. This is saved in output.'
             }
         },
         required: ['score', 'reason']
     }
 };
+
+// ===== PROVIDER CONFIGURATIONS =====
+// Each provider has its own API format, authentication, and response parsing.
+
+const PROVIDERS = {
+    anthropic: {
+        name: 'Anthropic',
+        baseUrl: 'https://api.anthropic.com/v1',
+        chatEndpoint: '/messages',
+        modelsEndpoint: '/models',
+        defaultModel: 'claude-sonnet-4-5-20250929',
+
+        /**
+         * Generate authentication headers for Anthropic API.
+         * @param {string} apiKey - The Anthropic API key.
+         * @returns {Object} Headers object.
+         */
+        authHeader: function(apiKey) {
+            return {
+                'Content-Type': 'application/json',
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01'
+            };
+        },
+
+        /**
+         * Format a chat completion request for Anthropic API.
+         * @param {Array} messages - The conversation messages.
+         * @param {Array} tools - Tool definitions.
+         * @param {Object} toolChoice - Tool choice specification.
+         * @param {string} systemPrompt - System prompt.
+         * @param {number} maxTokens - Maximum tokens.
+         * @param {string} model - Model ID.
+         * @returns {Object} Request body.
+         */
+        formatRequest: function(messages, tools, toolChoice, systemPrompt, maxTokens, model) {
+            return {
+                model: model,
+                max_tokens: maxTokens,
+                system: systemPrompt,
+                tools: tools,
+                tool_choice: toolChoice,
+                messages: messages
+            };
+        },
+
+        /**
+         * Parse tool call from Anthropic response.
+         * @param {Object} data - Response data.
+         * @returns {Object|null} Tool call info {toolName, toolId, input} or null.
+         */
+        parseToolResponse: function(data) {
+            if (data.content && Array.isArray(data.content)) {
+                for (var i = 0; i < data.content.length; i++) {
+                    if (data.content[i].type === 'tool_use') {
+                        return {
+                            toolName: data.content[i].name,
+                            toolId: data.content[i].id,
+                            input: data.content[i].input
+                        };
+                    }
+                }
+            }
+            return null;
+        },
+
+        /**
+         * Format tool result message for Anthropic.
+         * @param {string} toolId - The tool call ID.
+         * @param {string} content - The result content.
+         * @returns {Object} Message object.
+         */
+        formatToolResult: function(toolId, content) {
+            return {
+                role: 'user',
+                content: [
+                    {
+                        type: 'tool_result',
+                        tool_use_id: toolId,
+                        content: content
+                    }
+                ]
+            };
+        },
+
+        /**
+         * Format assistant message with tool use for history.
+         * @param {Object} toolCall - The tool call info.
+         * @returns {Object} Message object.
+         */
+        formatAssistantToolUse: function(toolCall) {
+            return {
+                role: 'assistant',
+                content: [
+                    {
+                        type: 'tool_use',
+                        id: toolCall.toolId,
+                        name: toolCall.toolName,
+                        input: toolCall.input
+                    }
+                ]
+            };
+        },
+
+        /**
+         * Parse models from Anthropic API response.
+         * @param {Object} data - Response data.
+         * @returns {Array} Array of {id, name} objects.
+         */
+        parseModels: function(data) {
+            if (data.data && Array.isArray(data.data)) {
+                return data.data.map(function(m) {
+                    return { id: m.id, name: m.display_name || m.id };
+                });
+            }
+            return [];
+        }
+    },
+
+    moonshot: {
+        name: 'Moonshot',
+        baseUrl: 'https://api.moonshot.ai/v1',
+        chatEndpoint: '/chat/completions',
+        modelsEndpoint: '/models',
+        defaultModel: 'kimi-k2-turbo-preview',
+
+        /**
+         * Generate authentication headers for Moonshot API.
+         * @param {string} apiKey - The Moonshot API key.
+         * @returns {Object} Headers object.
+         */
+        authHeader: function(apiKey) {
+            return {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + apiKey
+            };
+        },
+
+        /**
+         * Format a chat completion request for Moonshot API (OpenAI compatible).
+         * @param {Array} messages - The conversation messages (Anthropic format).
+         * @param {Array} tools - Tool definitions (Anthropic format).
+         * @param {Object} toolChoice - Tool choice specification.
+         * @param {string} systemPrompt - System prompt.
+         * @param {number} maxTokens - Maximum tokens.
+         * @param {string} model - Model ID.
+         * @returns {Object} Request body.
+         */
+        formatRequest: function(messages, tools, toolChoice, systemPrompt, maxTokens, model) {
+            // Build messages array with system message first
+            var formattedMessages = [];
+            if (systemPrompt) {
+                formattedMessages.push({ role: 'system', content: systemPrompt });
+            }
+
+            // Convert each message to OpenAI format
+            for (var i = 0; i < messages.length; i++) {
+                var converted = convertMessageToOpenAI(messages[i]);
+                if (converted) {
+                    formattedMessages.push(converted);
+                }
+            }
+
+            // Convert tools to OpenAI function format
+            var functions = tools.map(function(tool) {
+                return {
+                    type: 'function',
+                    function: {
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: tool.input_schema
+                    }
+                };
+            });
+
+            var request = {
+                model: model,
+                max_tokens: maxTokens,
+                messages: formattedMessages,
+                tools: functions
+                // Temperature omitted - let each model use its API default
+            };
+
+            // Tool choice formatting for OpenAI
+            if (toolChoice && toolChoice.type === 'tool') {
+                request.tool_choice = {
+                    type: 'function',
+                    function: { name: toolChoice.name }
+                };
+
+                // kimi-k2.5 has thinking enabled by default, which is incompatible
+                // with tool_choice. Disable thinking when forcing tool use.
+                if (model === 'kimi-k2.5') {
+                    request.thinking = { type: 'disabled' };
+                }
+            }
+
+            return request;
+        },
+
+        /**
+         * Parse tool call from Moonshot/OpenAI response.
+         * @param {Object} data - Response data.
+         * @returns {Object|null} Tool call info {toolName, toolId, input} or null.
+         */
+        parseToolResponse: function(data) {
+            if (data.choices && data.choices[0] && data.choices[0].message) {
+                var msg = data.choices[0].message;
+                if (msg.tool_calls && msg.tool_calls.length > 0) {
+                    var toolCall = msg.tool_calls[0];
+                    var args = {};
+                    try {
+                        args = JSON.parse(toolCall.function.arguments);
+                    } catch (e) {
+                        console.warn('[LiSeSca] Failed to parse tool arguments:', e);
+                    }
+                    return {
+                        toolName: toolCall.function.name,
+                        toolId: toolCall.id,
+                        input: args
+                    };
+                }
+            }
+            return null;
+        },
+
+        /**
+         * Format tool result message for OpenAI/Moonshot.
+         * @param {string} toolId - The tool call ID.
+         * @param {string} content - The result content.
+         * @returns {Object} Message object.
+         */
+        formatToolResult: function(toolId, content) {
+            return {
+                role: 'tool',
+                tool_call_id: toolId,
+                content: content
+            };
+        },
+
+        /**
+         * Format assistant message with tool use for history (OpenAI format).
+         * @param {Object} toolCall - The tool call info.
+         * @returns {Object} Message object.
+         */
+        formatAssistantToolUse: function(toolCall) {
+            return {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                    {
+                        id: toolCall.toolId,
+                        type: 'function',
+                        function: {
+                            name: toolCall.toolName,
+                            arguments: JSON.stringify(toolCall.input)
+                        }
+                    }
+                ]
+            };
+        },
+
+        /**
+         * Parse models from Moonshot/OpenAI API response.
+         * @param {Object} data - Response data.
+         * @returns {Array} Array of {id, name} objects.
+         */
+        parseModels: function(data) {
+            if (data.data && Array.isArray(data.data)) {
+                return data.data.map(function(m) {
+                    return { id: m.id, name: m.id };
+                });
+            }
+            return [];
+        }
+    }
+};
+
+/**
+ * Convert an Anthropic-format message to OpenAI format.
+ * Handles tool_result and tool_use content blocks.
+ * @param {Object} msg - Anthropic format message.
+ * @returns {Object|null} OpenAI format message or null if conversion fails.
+ */
+function convertMessageToOpenAI(msg) {
+    // Simple text message
+    if (typeof msg.content === 'string') {
+        return { role: msg.role, content: msg.content };
+    }
+
+    // Handle array content (tool_use or tool_result)
+    if (Array.isArray(msg.content)) {
+        for (var i = 0; i < msg.content.length; i++) {
+            var block = msg.content[i];
+
+            // Tool result from user
+            if (block.type === 'tool_result') {
+                return {
+                    role: 'tool',
+                    tool_call_id: block.tool_use_id,
+                    content: block.content
+                };
+            }
+
+            // Tool use from assistant
+            if (block.type === 'tool_use') {
+                return {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                        {
+                            id: block.id,
+                            type: 'function',
+                            function: {
+                                name: block.name,
+                                arguments: JSON.stringify(block.input)
+                            }
+                        }
+                    ]
+                };
+            }
+        }
+    }
+
+    // Fallback: return as-is (might not work, but better than null)
+    return msg;
+}
 
 export const AIClient = {
     /** Conversation history for the current page */
@@ -149,18 +480,148 @@ export const AIClient = {
 
     /**
      * Check if the AI client is properly configured with API key and criteria.
-     * @returns {boolean} True if both API key and criteria are set.
+     * @returns {boolean} True if configured properly.
      */
     isConfigured: function() {
-        return !!(CONFIG.ANTHROPIC_API_KEY && CONFIG.JOB_CRITERIA);
+        return CONFIG.isAIConfigured();
     },
 
     /**
      * Check if People AI client is properly configured.
-     * @returns {boolean} True if both API key and people criteria are set.
+     * @returns {boolean} True if configured properly.
      */
     isPeopleConfigured: function() {
-        return !!(CONFIG.ANTHROPIC_API_KEY && CONFIG.PEOPLE_CRITERIA);
+        return CONFIG.isPeopleAIConfigured();
+    },
+
+    /**
+     * Get the current provider configuration based on selected model.
+     * @returns {Object} Provider configuration object.
+     */
+    getProvider: function() {
+        var providerName = CONFIG.getProviderForModel(CONFIG.AI_MODEL);
+        if (providerName && PROVIDERS[providerName]) {
+            return PROVIDERS[providerName];
+        }
+        // Default to Anthropic for backward compatibility
+        return PROVIDERS.anthropic;
+    },
+
+    /**
+     * Get the model to use for API calls.
+     * @returns {string} Model ID.
+     */
+    getModel: function() {
+        if (CONFIG.AI_MODEL) {
+            return CONFIG.AI_MODEL;
+        }
+        // Default model based on which API key is available
+        if (CONFIG.ANTHROPIC_API_KEY) {
+            return PROVIDERS.anthropic.defaultModel;
+        }
+        if (CONFIG.MOONSHOT_API_KEY) {
+            return PROVIDERS.moonshot.defaultModel;
+        }
+        return PROVIDERS.anthropic.defaultModel;
+    },
+
+    /**
+     * Fetch available models from a specific provider.
+     * @param {string} providerName - 'anthropic' or 'moonshot'.
+     * @param {string} apiKey - The API key for the provider.
+     * @returns {Promise<Array>} Array of model objects {id, name}.
+     */
+    fetchModels: function(providerName, apiKey) {
+        var provider = PROVIDERS[providerName];
+
+        if (!provider) {
+            return Promise.reject(new Error('Unknown provider: ' + providerName));
+        }
+
+        if (!apiKey) {
+            return Promise.reject(new Error('API key required'));
+        }
+
+        var url = provider.baseUrl + provider.modelsEndpoint;
+        var headers = provider.authHeader(apiKey);
+
+        return new Promise(function(resolve, reject) {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                headers: headers,
+                onload: function(response) {
+                    if (response.status !== 200) {
+                        reject(new Error('API error: ' + response.status));
+                        return;
+                    }
+                    try {
+                        var data = JSON.parse(response.responseText);
+                        var models = provider.parseModels(data);
+                        resolve(models);
+                    } catch (error) {
+                        reject(new Error('Failed to parse models response: ' + error.message));
+                    }
+                },
+                onerror: function(error) {
+                    reject(new Error('Network error'));
+                },
+                ontimeout: function() {
+                    reject(new Error('Request timeout'));
+                },
+                timeout: 15000
+            });
+        });
+    },
+
+    /**
+     * Fetch models from all providers with valid API keys.
+     * Updates CONFIG.CACHED_MODELS with results.
+     * @returns {Promise<Object>} Object with {anthropic: [], moonshot: []} arrays.
+     */
+    fetchAllModels: function() {
+        var self = this;
+        var promises = [];
+        var results = {
+            anthropic: [],
+            moonshot: []
+        };
+
+        // Fetch from Anthropic if key is present
+        if (CONFIG.ANTHROPIC_API_KEY) {
+            promises.push(
+                self.fetchModels('anthropic', CONFIG.ANTHROPIC_API_KEY)
+                    .then(function(models) {
+                        results.anthropic = models;
+                        CONFIG.CACHED_MODELS.anthropic = models;
+                        CONFIG.CACHED_MODELS.lastFetch.anthropic = Date.now();
+                    })
+                    .catch(function(error) {
+                        console.warn('[LiSeSca] Failed to fetch Anthropic models:', error);
+                        results.anthropic = [];
+                    })
+            );
+        }
+
+        // Fetch from Moonshot if key is present
+        if (CONFIG.MOONSHOT_API_KEY) {
+            promises.push(
+                self.fetchModels('moonshot', CONFIG.MOONSHOT_API_KEY)
+                    .then(function(models) {
+                        results.moonshot = models;
+                        CONFIG.CACHED_MODELS.moonshot = models;
+                        CONFIG.CACHED_MODELS.lastFetch.moonshot = Date.now();
+                    })
+                    .catch(function(error) {
+                        console.warn('[LiSeSca] Failed to fetch Moonshot models:', error);
+                        results.moonshot = [];
+                    })
+            );
+        }
+
+        return Promise.all(promises).then(function() {
+            return results;
+        });
     },
 
     /**
@@ -300,39 +761,41 @@ export const AIClient = {
     },
 
     /**
-     * Send a job card to Claude for evaluation.
+     * Send a job card for evaluation using the configured provider.
      * @param {string} cardMarkdown - The job card formatted as Markdown.
      * @returns {Promise<boolean>} True if the job should be downloaded.
      */
     sendJobForEvaluation: function(cardMarkdown) {
         var self = this;
+        var provider = this.getProvider();
+        var model = this.getModel();
+        var apiKey = CONFIG.getActiveAPIKey();
 
         // Add the job card to the conversation
         var messagesWithJob = this.conversationHistory.concat([
             { role: 'user', content: cardMarkdown }
         ]);
 
-        var requestBody = {
-            model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 100,
-            system: SYSTEM_PROMPT,
-            tools: [JOB_EVALUATION_TOOL],
-            tool_choice: { type: 'tool', name: 'job_evaluation' },
-            messages: messagesWithJob
-        };
+        var requestBody = provider.formatRequest(
+            messagesWithJob,
+            [JOB_EVALUATION_TOOL],
+            { type: 'tool', name: 'job_evaluation' },
+            SYSTEM_PROMPT,
+            100,
+            model
+        );
+
+        var url = provider.baseUrl + provider.chatEndpoint;
+        var headers = provider.authHeader(apiKey);
 
         return new Promise(function(resolve, reject) {
             GM_xmlhttpRequest({
                 method: 'POST',
-                url: 'https://api.anthropic.com/v1/messages',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                    'anthropic-version': '2023-06-01'
-                },
+                url: url,
+                headers: headers,
                 data: JSON.stringify(requestBody),
                 onload: function(response) {
-                    self.handleApiResponse(response, cardMarkdown, resolve, reject);
+                    self.handleApiResponse(response, cardMarkdown, resolve, reject, provider);
                 },
                 onerror: function(error) {
                     console.error('[LiSeSca] AI API request failed:', error);
@@ -342,7 +805,7 @@ export const AIClient = {
                     console.error('[LiSeSca] AI API request timed out');
                     reject(new Error('Request timeout'));
                 },
-                timeout: 30000 // 30 second timeout
+                timeout: 30000
             });
         });
     },
@@ -353,8 +816,11 @@ export const AIClient = {
      * @param {string} cardMarkdown - The original job card (for logging).
      * @param {Function} resolve - Promise resolve function.
      * @param {Function} reject - Promise reject function.
+     * @param {Object} provider - The provider configuration (optional, defaults to current).
      */
-    handleApiResponse: function(response, cardMarkdown, resolve, reject) {
+    handleApiResponse: function(response, cardMarkdown, resolve, reject, provider) {
+        provider = provider || this.getProvider();
+
         if (response.status !== 200) {
             console.error('[LiSeSca] AI API error:', response.status, response.responseText);
             // Fail-open: allow the job on API errors
@@ -365,30 +831,29 @@ export const AIClient = {
         try {
             var data = JSON.parse(response.responseText);
 
-            // Find the tool_use content block
-            var toolUse = null;
-            if (data.content && Array.isArray(data.content)) {
-                for (var i = 0; i < data.content.length; i++) {
-                    if (data.content[i].type === 'tool_use') {
-                        toolUse = data.content[i];
-                        break;
-                    }
-                }
-            }
+            // Use provider's parsing method
+            var toolCall = provider.parseToolResponse(data);
 
-            if (!toolUse || toolUse.name !== 'job_evaluation') {
+            if (!toolCall || toolCall.toolName !== 'job_evaluation') {
                 console.warn('[LiSeSca] Unexpected AI response format, allowing job.');
                 resolve(true);
                 return;
             }
 
-            var shouldDownload = toolUse.input.download === true;
+            var shouldDownload = toolCall.input.download === true;
 
-            // Update conversation history with this exchange
+            // Update conversation history with this exchange (in Anthropic format for internal consistency)
             this.conversationHistory.push({ role: 'user', content: cardMarkdown });
             this.conversationHistory.push({
                 role: 'assistant',
-                content: [toolUse]
+                content: [
+                    {
+                        type: 'tool_use',
+                        id: toolCall.toolId,
+                        name: toolCall.toolName,
+                        input: toolCall.input
+                    }
+                ]
             });
             // Add tool result to complete the exchange
             this.conversationHistory.push({
@@ -396,7 +861,7 @@ export const AIClient = {
                 content: [
                     {
                         type: 'tool_result',
-                        tool_use_id: toolUse.id,
+                        tool_use_id: toolCall.toolId,
                         content: shouldDownload ? 'Job queued for download.' : 'Job skipped.'
                     }
                 ]
@@ -436,38 +901,40 @@ export const AIClient = {
     },
 
     /**
-     * Send a job card to Claude for three-tier triage.
+     * Send a job card for three-tier triage using the configured provider.
      * @param {string} cardMarkdown - The job card formatted as Markdown.
      * @returns {Promise<{decision: string, reason: string}>} Decision object with reason.
      */
     sendCardForTriage: function(cardMarkdown) {
         var self = this;
+        var provider = this.getProvider();
+        var model = this.getModel();
+        var apiKey = CONFIG.getActiveAPIKey();
 
         var messagesWithJob = this.conversationHistory.concat([
             { role: 'user', content: cardMarkdown }
         ]);
 
-        var requestBody = {
-            model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 200,  // Increased for reason text
-            system: FULL_AI_SYSTEM_PROMPT,
-            tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
-            tool_choice: { type: 'tool', name: 'card_triage' },
-            messages: messagesWithJob
-        };
+        var requestBody = provider.formatRequest(
+            messagesWithJob,
+            [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
+            { type: 'tool', name: 'card_triage' },
+            FULL_AI_SYSTEM_PROMPT,
+            200,
+            model
+        );
+
+        var url = provider.baseUrl + provider.chatEndpoint;
+        var headers = provider.authHeader(apiKey);
 
         return new Promise(function(resolve, reject) {
             GM_xmlhttpRequest({
                 method: 'POST',
-                url: 'https://api.anthropic.com/v1/messages',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                    'anthropic-version': '2023-06-01'
-                },
+                url: url,
+                headers: headers,
                 data: JSON.stringify(requestBody),
                 onload: function(response) {
-                    self.handleTriageResponse(response, cardMarkdown, resolve, reject);
+                    self.handleTriageResponse(response, cardMarkdown, resolve, reject, provider);
                 },
                 onerror: function(error) {
                     console.error('[LiSeSca] AI triage request failed:', error);
@@ -488,8 +955,11 @@ export const AIClient = {
      * @param {string} cardMarkdown - The original job card.
      * @param {Function} resolve - Promise resolve function.
      * @param {Function} reject - Promise reject function.
+     * @param {Object} provider - The provider configuration.
      */
-    handleTriageResponse: function(response, cardMarkdown, resolve, reject) {
+    handleTriageResponse: function(response, cardMarkdown, resolve, reject, provider) {
+        provider = provider || this.getProvider();
+
         if (response.status !== 200) {
             console.error('[LiSeSca] AI triage API error:', response.status, response.responseText);
             resolve({ decision: 'keep', reason: 'API error ' + response.status }); // Fail-open
@@ -499,24 +969,17 @@ export const AIClient = {
         try {
             var data = JSON.parse(response.responseText);
 
-            var toolUse = null;
-            if (data.content && Array.isArray(data.content)) {
-                for (var i = 0; i < data.content.length; i++) {
-                    if (data.content[i].type === 'tool_use') {
-                        toolUse = data.content[i];
-                        break;
-                    }
-                }
-            }
+            // Use provider's parsing method
+            var toolCall = provider.parseToolResponse(data);
 
-            if (!toolUse || toolUse.name !== 'card_triage') {
+            if (!toolCall || toolCall.toolName !== 'card_triage') {
                 console.warn('[LiSeSca] Unexpected triage response format, returning "keep".');
                 resolve({ decision: 'keep', reason: 'Unexpected response format' });
                 return;
             }
 
-            var decision = toolUse.input.decision;
-            var reason = toolUse.input.reason || '(no reason provided)';
+            var decision = toolCall.input.decision;
+            var reason = toolCall.input.reason || '(no reason provided)';
 
             if (decision !== 'reject' && decision !== 'keep' && decision !== 'maybe') {
                 console.warn('[LiSeSca] Invalid triage decision "' + decision + '", returning "keep".');
@@ -524,11 +987,18 @@ export const AIClient = {
                 reason = 'Invalid decision value: ' + decision;
             }
 
-            // Update conversation history
+            // Update conversation history (in Anthropic format for internal consistency)
             this.conversationHistory.push({ role: 'user', content: cardMarkdown });
             this.conversationHistory.push({
                 role: 'assistant',
-                content: [toolUse]
+                content: [
+                    {
+                        type: 'tool_use',
+                        id: toolCall.toolId,
+                        name: toolCall.toolName,
+                        input: toolCall.input
+                    }
+                ]
             });
 
             var resultMessage = '';
@@ -545,7 +1015,7 @@ export const AIClient = {
                 content: [
                     {
                         type: 'tool_result',
-                        tool_use_id: toolUse.id,
+                        tool_use_id: toolCall.toolId,
                         content: resultMessage
                     }
                 ]
@@ -579,12 +1049,15 @@ export const AIClient = {
     },
 
     /**
-     * Send full job details to Claude for final evaluation.
+     * Send full job details for final evaluation using the configured provider.
      * @param {string} fullJobMarkdown - The complete job formatted as Markdown.
      * @returns {Promise<{accept: boolean, reason: string}>} Decision object with reason.
      */
     sendFullJobForEvaluation: function(fullJobMarkdown) {
         var self = this;
+        var provider = this.getProvider();
+        var model = this.getModel();
+        var apiKey = CONFIG.getActiveAPIKey();
 
         var contextMessage = 'Here are the full job details for your final decision:\n\n' + fullJobMarkdown;
 
@@ -592,27 +1065,26 @@ export const AIClient = {
             { role: 'user', content: contextMessage }
         ]);
 
-        var requestBody = {
-            model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 300,  // Increased for detailed reason text
-            system: FULL_AI_SYSTEM_PROMPT,
-            tools: [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
-            tool_choice: { type: 'tool', name: 'full_evaluation' },
-            messages: messagesWithJob
-        };
+        var requestBody = provider.formatRequest(
+            messagesWithJob,
+            [CARD_TRIAGE_TOOL, FULL_EVALUATION_TOOL],
+            { type: 'tool', name: 'full_evaluation' },
+            FULL_AI_SYSTEM_PROMPT,
+            500,
+            model
+        );
+
+        var url = provider.baseUrl + provider.chatEndpoint;
+        var headers = provider.authHeader(apiKey);
 
         return new Promise(function(resolve, reject) {
             GM_xmlhttpRequest({
                 method: 'POST',
-                url: 'https://api.anthropic.com/v1/messages',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                    'anthropic-version': '2023-06-01'
-                },
+                url: url,
+                headers: headers,
                 data: JSON.stringify(requestBody),
                 onload: function(response) {
-                    self.handleFullEvaluationResponse(response, contextMessage, resolve, reject);
+                    self.handleFullEvaluationResponse(response, contextMessage, resolve, reject, provider);
                 },
                 onerror: function(error) {
                     console.error('[LiSeSca] AI full evaluation request failed:', error);
@@ -622,7 +1094,7 @@ export const AIClient = {
                     console.error('[LiSeSca] AI full evaluation request timed out');
                     reject(new Error('Request timeout'));
                 },
-                timeout: 60000 // 60 second timeout for full job evaluation
+                timeout: 60000
             });
         });
     },
@@ -633,8 +1105,11 @@ export const AIClient = {
      * @param {string} contextMessage - The message sent with full job details.
      * @param {Function} resolve - Promise resolve function.
      * @param {Function} reject - Promise reject function.
+     * @param {Object} provider - The provider configuration.
      */
-    handleFullEvaluationResponse: function(response, contextMessage, resolve, reject) {
+    handleFullEvaluationResponse: function(response, contextMessage, resolve, reject, provider) {
+        provider = provider || this.getProvider();
+
         if (response.status !== 200) {
             console.error('[LiSeSca] AI full evaluation API error:', response.status, response.responseText);
             resolve({ accept: true, reason: 'API error ' + response.status }); // Fail-open
@@ -644,37 +1119,37 @@ export const AIClient = {
         try {
             var data = JSON.parse(response.responseText);
 
-            var toolUse = null;
-            if (data.content && Array.isArray(data.content)) {
-                for (var i = 0; i < data.content.length; i++) {
-                    if (data.content[i].type === 'tool_use') {
-                        toolUse = data.content[i];
-                        break;
-                    }
-                }
-            }
+            // Use provider's parsing method
+            var toolCall = provider.parseToolResponse(data);
 
-            if (!toolUse || toolUse.name !== 'full_evaluation') {
+            if (!toolCall || toolCall.toolName !== 'full_evaluation') {
                 console.warn('[LiSeSca] Unexpected full evaluation response, accepting job.');
                 resolve({ accept: true, reason: 'Unexpected response format' });
                 return;
             }
 
-            var accept = toolUse.input.accept === true;
-            var reason = toolUse.input.reason || '(no reason provided)';
+            var accept = toolCall.input.accept === true;
+            var reason = toolCall.input.reason || '(no reason provided)';
 
-            // Update conversation history
+            // Update conversation history (in Anthropic format for internal consistency)
             this.conversationHistory.push({ role: 'user', content: contextMessage });
             this.conversationHistory.push({
                 role: 'assistant',
-                content: [toolUse]
+                content: [
+                    {
+                        type: 'tool_use',
+                        id: toolCall.toolId,
+                        name: toolCall.toolName,
+                        input: toolCall.input
+                    }
+                ]
             });
             this.conversationHistory.push({
                 role: 'user',
                 content: [
                     {
                         type: 'tool_result',
-                        tool_use_id: toolUse.id,
+                        tool_use_id: toolCall.toolId,
                         content: accept ? 'Job accepted and saved.' : 'Job rejected after full review.'
                     }
                 ]
@@ -729,39 +1204,41 @@ export const AIClient = {
     },
 
     /**
-     * Send a person card to Claude for scoring.
+     * Send a person card for scoring using the configured provider.
      * @param {string} cardMarkdown - The person card formatted as Markdown.
      * @returns {Promise<{score: number, label: string, reason: string}>}
      */
     sendPeopleCardForScoring: function(cardMarkdown) {
         var self = this;
+        var provider = this.getProvider();
+        var model = this.getModel();
+        var apiKey = CONFIG.getActiveAPIKey();
 
         // Criteria is in the system prompt, conversation history has prior cards
         var messagesWithCard = this.peopleConversationHistory.concat([
             { role: 'user', content: cardMarkdown }
         ]);
 
-        var requestBody = {
-            model: 'claude-sonnet-4-5-20250929',
-            max_tokens: 200,
-            system: PEOPLE_SCORE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
-            tools: [PEOPLE_SCORE_TOOL],
-            tool_choice: { type: 'tool', name: 'people_score' },
-            messages: messagesWithCard
-        };
+        var requestBody = provider.formatRequest(
+            messagesWithCard,
+            [PEOPLE_SCORE_TOOL],
+            { type: 'tool', name: 'people_score' },
+            PEOPLE_SCORE_SYSTEM_PROMPT + CONFIG.PEOPLE_CRITERIA,
+            300,
+            model
+        );
+
+        var url = provider.baseUrl + provider.chatEndpoint;
+        var headers = provider.authHeader(apiKey);
 
         return new Promise(function(resolve, reject) {
             GM_xmlhttpRequest({
                 method: 'POST',
-                url: 'https://api.anthropic.com/v1/messages',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': CONFIG.ANTHROPIC_API_KEY,
-                    'anthropic-version': '2023-06-01'
-                },
+                url: url,
+                headers: headers,
                 data: JSON.stringify(requestBody),
                 onload: function(response) {
-                    self.handlePeopleScoreResponse(response, cardMarkdown, resolve, reject);
+                    self.handlePeopleScoreResponse(response, cardMarkdown, resolve, reject, provider);
                 },
                 onerror: function(error) {
                     console.error('[LiSeSca] People AI scoring request failed:', error);
@@ -782,9 +1259,11 @@ export const AIClient = {
      * @param {string} cardMarkdown - The original person card.
      * @param {Function} resolve - Promise resolve function.
      * @param {Function} reject - Promise reject function.
+     * @param {Object} provider - The provider configuration.
      */
-    handlePeopleScoreResponse: function(response, cardMarkdown, resolve, reject) {
+    handlePeopleScoreResponse: function(response, cardMarkdown, resolve, reject, provider) {
         var self = this;
+        provider = provider || this.getProvider();
 
         if (response.status !== 200) {
             console.error('[LiSeSca] People AI scoring API error:', response.status, response.responseText);
@@ -794,24 +1273,18 @@ export const AIClient = {
 
         try {
             var data = JSON.parse(response.responseText);
-            var toolUse = null;
-            if (data.content && Array.isArray(data.content)) {
-                for (var i = 0; i < data.content.length; i++) {
-                    if (data.content[i].type === 'tool_use') {
-                        toolUse = data.content[i];
-                        break;
-                    }
-                }
-            }
 
-            if (!toolUse || toolUse.name !== 'people_score') {
+            // Use provider's parsing method
+            var toolCall = provider.parseToolResponse(data);
+
+            if (!toolCall || toolCall.toolName !== 'people_score') {
                 console.warn('[LiSeSca] Unexpected people scoring response format, returning score 3.');
                 resolve({ score: 3, label: 'Moderate interest', reason: 'Unexpected response format' });
                 return;
             }
 
-            var score = toolUse.input.score;
-            var reason = toolUse.input.reason || '(no reason provided)';
+            var score = toolCall.input.score;
+            var reason = toolCall.input.reason || '(no reason provided)';
 
             // Validate score is in range
             if (typeof score !== 'number' || score < 0 || score > 5) {
@@ -822,11 +1295,18 @@ export const AIClient = {
 
             var label = self.scoreToLabel(score);
 
-            // Update conversation history
+            // Update conversation history (in Anthropic format for internal consistency)
             this.peopleConversationHistory.push({ role: 'user', content: cardMarkdown });
             this.peopleConversationHistory.push({
                 role: 'assistant',
-                content: [toolUse]
+                content: [
+                    {
+                        type: 'tool_use',
+                        id: toolCall.toolId,
+                        name: toolCall.toolName,
+                        input: toolCall.input
+                    }
+                ]
             });
 
             var resultMessage = score >= 3 ? 'Person scored ' + score + '/5, saved.' : 'Person scored ' + score + '/5, skipped.';
@@ -836,7 +1316,7 @@ export const AIClient = {
                 content: [
                     {
                         type: 'tool_result',
-                        tool_use_id: toolUse.id,
+                        tool_use_id: toolCall.toolId,
                         content: resultMessage
                     }
                 ]

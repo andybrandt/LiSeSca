@@ -4,7 +4,7 @@
 const banner = `// ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.3.16
+// @version      0.4.0
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -18,6 +18,7 @@ const banner = `// ==UserScript==
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @connect      api.anthropic.com
+// @connect      api.moonshot.ai
 // @require      https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
 // @require      https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js
 // @run-at       document-idle

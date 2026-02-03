@@ -22,6 +22,7 @@ export const State = {
         JOB_IDS_ON_PAGE: 'lisesca_jobIdsOnPage',  // JSON array of job IDs for current page
         JOB_TOTAL: 'lisesca_jobTotal',            // total jobs count for "All" mode
         // AI evaluation statistics
+        JOBS_PROCESSED: 'lisesca_jobsProcessed',        // count of all jobs processed (saved + skipped)
         AI_JOBS_EVALUATED: 'lisesca_aiJobsEvaluated',  // count of jobs evaluated by AI
         AI_JOBS_ACCEPTED: 'lisesca_aiJobsAccepted',    // count of jobs accepted by AI
         AI_PEOPLE_EVALUATED: 'lisesca_aiPeopleEvaluated', // count of people evaluated by AI
@@ -102,7 +103,8 @@ export const State = {
         this.set(this.KEYS.JOB_INDEX, 0);
         this.set(this.KEYS.JOB_IDS_ON_PAGE, JSON.stringify([]));
         this.set(this.KEYS.JOB_TOTAL, 0);
-        // Reset AI evaluation counters
+        // Reset processing and AI evaluation counters
+        this.set(this.KEYS.JOBS_PROCESSED, 0);
         this.set(this.KEYS.AI_JOBS_EVALUATED, 0);
         this.set(this.KEYS.AI_JOBS_ACCEPTED, 0);
         this.set(this.KEYS.AI_PEOPLE_EVALUATED, 0);
@@ -286,6 +288,22 @@ export const State = {
     },
 
     /**
+     * Get the count of all jobs processed (saved + skipped) in this session.
+     * @returns {number}
+     */
+    getJobsProcessed: function() {
+        return this.get(this.KEYS.JOBS_PROCESSED, 0);
+    },
+
+    /**
+     * Increment the jobs processed counter.
+     */
+    incrementJobsProcessed: function() {
+        var current = this.get(this.KEYS.JOBS_PROCESSED, 0);
+        this.set(this.KEYS.JOBS_PROCESSED, current + 1);
+    },
+
+    /**
      * Get the count of jobs evaluated by AI in this session.
      * @returns {number}
      */
@@ -400,6 +418,7 @@ export const State = {
         GM_deleteValue(this.KEYS.JOB_INDEX);
         GM_deleteValue(this.KEYS.JOB_IDS_ON_PAGE);
         GM_deleteValue(this.KEYS.JOB_TOTAL);
+        GM_deleteValue(this.KEYS.JOBS_PROCESSED);
         GM_deleteValue(this.KEYS.AI_JOBS_EVALUATED);
         GM_deleteValue(this.KEYS.AI_JOBS_ACCEPTED);
         GM_deleteValue(this.KEYS.AI_PEOPLE_EVALUATED);

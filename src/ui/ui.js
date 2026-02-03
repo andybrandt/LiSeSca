@@ -6,6 +6,7 @@ import { CONFIG } from '../shared/config.js';
 import { State } from '../shared/state.js';
 import { PageDetector } from '../shared/page-detector.js';
 import { JobPaginator } from '../jobs/paginator.js';
+import { AIClient } from '../shared/ai-client.js';
 
 // Controller and JobController are used in event handlers (runtime calls, not import-time)
 // They will be available in the bundled IIFE scope when Rollup bundles the code.
@@ -500,6 +501,66 @@ export const UI = {
             .lisesca-ai-config-row textarea:focus {
                 outline: none;
                 border-color: #58a6ff;
+            }
+
+            /* Model selection dropdown and refresh button */
+            .lisesca-model-container {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+
+            .lisesca-model-select {
+                flex: 1;
+                background: #0d1117;
+                color: #e1e4e8;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 8px 10px;
+                font-size: 13px;
+                box-sizing: border-box;
+                cursor: pointer;
+            }
+            .lisesca-model-select:focus {
+                outline: none;
+                border-color: #58a6ff;
+            }
+            .lisesca-model-select:disabled {
+                background: #161b22;
+                color: #6e7681;
+                cursor: not-allowed;
+            }
+            .lisesca-model-select optgroup {
+                background: #0d1117;
+                color: #8b949e;
+                font-weight: 600;
+                font-style: normal;
+            }
+            .lisesca-model-select option {
+                background: #0d1117;
+                color: #e1e4e8;
+                padding: 4px;
+            }
+
+            .lisesca-model-refresh {
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+                border-radius: 4px;
+                padding: 8px 12px;
+                font-size: 12px;
+                font-weight: 500;
+                cursor: pointer;
+                white-space: nowrap;
+                transition: background 0.15s;
+            }
+            .lisesca-model-refresh:hover {
+                background: #30363d;
+            }
+            .lisesca-model-refresh:disabled {
+                background: #161b22;
+                color: #6e7681;
+                cursor: not-allowed;
             }
 
             .lisesca-ai-config-row .lisesca-hint {
@@ -1472,6 +1533,62 @@ export const UI = {
         apiKeyRow.appendChild(apiKeyInput);
         apiKeyRow.appendChild(apiKeyHint);
 
+        // Moonshot API Key row
+        var moonshotKeyRow = document.createElement('div');
+        moonshotKeyRow.className = 'lisesca-ai-config-row';
+
+        var moonshotKeyLabel = document.createElement('label');
+        moonshotKeyLabel.textContent = 'Moonshot API Key:';
+        moonshotKeyLabel.htmlFor = 'lisesca-moonshot-api-key';
+
+        var moonshotKeyInput = document.createElement('input');
+        moonshotKeyInput.type = 'password';
+        moonshotKeyInput.id = 'lisesca-moonshot-api-key';
+        moonshotKeyInput.placeholder = 'sk-...';
+        moonshotKeyInput.value = CONFIG.MOONSHOT_API_KEY || '';
+
+        var moonshotKeyHint = document.createElement('div');
+        moonshotKeyHint.className = 'lisesca-hint';
+        moonshotKeyHint.textContent = 'Get your API key from platform.moonshot.ai';
+
+        moonshotKeyRow.appendChild(moonshotKeyLabel);
+        moonshotKeyRow.appendChild(moonshotKeyInput);
+        moonshotKeyRow.appendChild(moonshotKeyHint);
+
+        // Model selection row
+        var modelRow = document.createElement('div');
+        modelRow.className = 'lisesca-ai-config-row';
+
+        var modelLabel = document.createElement('label');
+        modelLabel.textContent = 'Model:';
+        modelLabel.htmlFor = 'lisesca-ai-model';
+
+        var modelContainer = document.createElement('div');
+        modelContainer.className = 'lisesca-model-container';
+
+        var modelSelect = document.createElement('select');
+        modelSelect.id = 'lisesca-ai-model';
+        modelSelect.className = 'lisesca-model-select';
+
+        var refreshBtn = document.createElement('button');
+        refreshBtn.type = 'button';
+        refreshBtn.className = 'lisesca-model-refresh';
+        refreshBtn.textContent = 'Refresh';
+        refreshBtn.addEventListener('click', function() {
+            UI.refreshModels();
+        });
+
+        modelContainer.appendChild(modelSelect);
+        modelContainer.appendChild(refreshBtn);
+
+        var modelHint = document.createElement('div');
+        modelHint.className = 'lisesca-hint';
+        modelHint.textContent = 'Select AI model. Click Refresh to fetch available models.';
+
+        modelRow.appendChild(modelLabel);
+        modelRow.appendChild(modelContainer);
+        modelRow.appendChild(modelHint);
+
         // Job Criteria row
         var criteriaRow = document.createElement('div');
         criteriaRow.className = 'lisesca-ai-config-row';
@@ -1545,6 +1662,8 @@ export const UI = {
         // Assemble panel
         panel.appendChild(title);
         panel.appendChild(apiKeyRow);
+        panel.appendChild(moonshotKeyRow);
+        panel.appendChild(modelRow);
         panel.appendChild(criteriaRow);
         panel.appendChild(peopleCriteriaRow);
         panel.appendChild(errorDiv);
@@ -1567,9 +1686,11 @@ export const UI = {
      */
     showAIConfig: function() {
         document.getElementById('lisesca-ai-api-key').value = CONFIG.ANTHROPIC_API_KEY || '';
+        document.getElementById('lisesca-moonshot-api-key').value = CONFIG.MOONSHOT_API_KEY || '';
         document.getElementById('lisesca-ai-criteria').value = CONFIG.JOB_CRITERIA || '';
         document.getElementById('lisesca-ai-people-criteria').value = CONFIG.PEOPLE_CRITERIA || '';
         document.getElementById('lisesca-ai-config-error').textContent = '';
+        this.populateModelDropdown();
         this.aiConfigOverlay.classList.add('lisesca-visible');
     },
 
@@ -1581,28 +1702,189 @@ export const UI = {
     },
 
     /**
+     * Populate the model dropdown with cached models, grouped by provider.
+     * Models are shown in optgroups by provider. Only providers with valid
+     * API keys are shown.
+     */
+    populateModelDropdown: function() {
+        var select = document.getElementById('lisesca-ai-model');
+        var anthropicKey = document.getElementById('lisesca-ai-api-key').value.trim();
+        var moonshotKey = document.getElementById('lisesca-moonshot-api-key').value.trim();
+
+        // Clear existing options
+        select.innerHTML = '';
+
+        // Check if we have any API keys
+        if (!anthropicKey && !moonshotKey) {
+            var placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = '(Enter API key first)';
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            select.appendChild(placeholder);
+            select.disabled = true;
+            return;
+        }
+
+        select.disabled = false;
+
+        // Add default empty option
+        var defaultOpt = document.createElement('option');
+        defaultOpt.value = '';
+        defaultOpt.textContent = '-- Select Model --';
+        select.appendChild(defaultOpt);
+
+        // Add Anthropic models if key is present
+        if (anthropicKey && CONFIG.CACHED_MODELS.anthropic && CONFIG.CACHED_MODELS.anthropic.length > 0) {
+            var anthropicGroup = document.createElement('optgroup');
+            anthropicGroup.label = 'Anthropic';
+            CONFIG.CACHED_MODELS.anthropic.forEach(function(model) {
+                var opt = document.createElement('option');
+                opt.value = model.id;
+                opt.textContent = model.name || model.id;
+                anthropicGroup.appendChild(opt);
+            });
+            select.appendChild(anthropicGroup);
+        }
+
+        // Add Moonshot models if key is present
+        if (moonshotKey && CONFIG.CACHED_MODELS.moonshot && CONFIG.CACHED_MODELS.moonshot.length > 0) {
+            var moonshotGroup = document.createElement('optgroup');
+            moonshotGroup.label = 'Moonshot';
+            CONFIG.CACHED_MODELS.moonshot.forEach(function(model) {
+                var opt = document.createElement('option');
+                opt.value = model.id;
+                opt.textContent = model.name || model.id;
+                moonshotGroup.appendChild(opt);
+            });
+            select.appendChild(moonshotGroup);
+        }
+
+        // If no cached models, show hint
+        if (select.options.length === 1) {
+            var hint = document.createElement('option');
+            hint.value = '';
+            hint.textContent = '(Click Refresh to fetch models)';
+            hint.disabled = true;
+            select.appendChild(hint);
+        }
+
+        // Set selected value
+        if (CONFIG.AI_MODEL) {
+            select.value = CONFIG.AI_MODEL;
+        }
+    },
+
+    /**
+     * Fetch available models from all providers with valid API keys.
+     * Updates the cached models and repopulates the dropdown.
+     */
+    refreshModels: function() {
+        var self = this;
+        var anthropicKey = document.getElementById('lisesca-ai-api-key').value.trim();
+        var moonshotKey = document.getElementById('lisesca-moonshot-api-key').value.trim();
+        var refreshBtn = document.querySelector('.lisesca-model-refresh');
+        var errorDiv = document.getElementById('lisesca-ai-config-error');
+
+        if (!anthropicKey && !moonshotKey) {
+            errorDiv.textContent = 'Enter at least one API key to fetch models.';
+            return;
+        }
+
+        // Disable refresh button and show loading state
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = 'Loading...';
+        errorDiv.textContent = '';
+
+        // Temporarily update CONFIG with current key values for fetching
+        var originalAnthropicKey = CONFIG.ANTHROPIC_API_KEY;
+        var originalMoonshotKey = CONFIG.MOONSHOT_API_KEY;
+        CONFIG.ANTHROPIC_API_KEY = anthropicKey;
+        CONFIG.MOONSHOT_API_KEY = moonshotKey;
+
+        AIClient.fetchAllModels().then(function(results) {
+            // Update cached models
+            if (results.anthropic) {
+                CONFIG.CACHED_MODELS.anthropic = results.anthropic;
+                CONFIG.CACHED_MODELS.lastFetch.anthropic = Date.now();
+            }
+            if (results.moonshot) {
+                CONFIG.CACHED_MODELS.moonshot = results.moonshot;
+                CONFIG.CACHED_MODELS.lastFetch.moonshot = Date.now();
+            }
+
+            // Save cache to persistent storage
+            CONFIG.saveAIConfig();
+
+            // Repopulate dropdown
+            self.populateModelDropdown();
+
+            // Show success message
+            var count = (results.anthropic ? results.anthropic.length : 0)
+                + (results.moonshot ? results.moonshot.length : 0);
+            console.log('[LiSeSca] Fetched ' + count + ' models from providers');
+
+        }).catch(function(error) {
+            console.error('[LiSeSca] Error fetching models:', error);
+            errorDiv.textContent = 'Error fetching models: ' + error.message;
+
+            // Restore original keys on error
+            CONFIG.ANTHROPIC_API_KEY = originalAnthropicKey;
+            CONFIG.MOONSHOT_API_KEY = originalMoonshotKey;
+
+        }).finally(function() {
+            // Re-enable refresh button
+            refreshBtn.disabled = false;
+            refreshBtn.textContent = 'Refresh';
+        });
+    },
+
+    /**
      * Validate and save AI configuration.
      */
     saveAIConfig: function() {
         var errorDiv = document.getElementById('lisesca-ai-config-error');
-        var apiKey = document.getElementById('lisesca-ai-api-key').value.trim();
+        var anthropicKey = document.getElementById('lisesca-ai-api-key').value.trim();
+        var moonshotKey = document.getElementById('lisesca-moonshot-api-key').value.trim();
+        var selectedModel = document.getElementById('lisesca-ai-model').value;
         var criteria = document.getElementById('lisesca-ai-criteria').value.trim();
         var peopleCriteria = document.getElementById('lisesca-ai-people-criteria').value.trim();
 
-        // API key is required if any criteria is set
-        if (!apiKey && (criteria || peopleCriteria)) {
-            errorDiv.textContent = 'Please enter your API key to enable AI filtering.';
+        // At least one API key is required if any criteria is set
+        if (!anthropicKey && !moonshotKey && (criteria || peopleCriteria)) {
+            errorDiv.textContent = 'Please enter at least one API key to enable AI filtering.';
             return;
         }
 
-        // Basic API key format validation
-        if (apiKey && !apiKey.startsWith('sk-ant-')) {
-            errorDiv.textContent = 'API key should start with "sk-ant-"';
+        // Basic API key format validation for Anthropic
+        if (anthropicKey && !anthropicKey.startsWith('sk-ant-')) {
+            errorDiv.textContent = 'Anthropic API key should start with "sk-ant-"';
             return;
+        }
+
+        // Basic API key format validation for Moonshot
+        if (moonshotKey && !moonshotKey.startsWith('sk-')) {
+            errorDiv.textContent = 'Moonshot API key should start with "sk-"';
+            return;
+        }
+
+        // Validate that selected model's provider has a key
+        if (selectedModel) {
+            var provider = CONFIG.getProviderForModel(selectedModel);
+            if (provider === 'anthropic' && !anthropicKey) {
+                errorDiv.textContent = 'Anthropic API key is required for the selected model.';
+                return;
+            }
+            if (provider === 'moonshot' && !moonshotKey) {
+                errorDiv.textContent = 'Moonshot API key is required for the selected model.';
+                return;
+            }
         }
 
         // Save to CONFIG
-        CONFIG.ANTHROPIC_API_KEY = apiKey;
+        CONFIG.ANTHROPIC_API_KEY = anthropicKey;
+        CONFIG.MOONSHOT_API_KEY = moonshotKey;
+        CONFIG.AI_MODEL = selectedModel;
         CONFIG.JOB_CRITERIA = criteria;
         CONFIG.PEOPLE_CRITERIA = peopleCriteria;
         CONFIG.saveAIConfig();
@@ -1611,8 +1893,9 @@ export const UI = {
         this.updateAIToggleState();
         this.updatePeopleAIToggleState();
 
-        console.log('[LiSeSca] AI config saved. Job configured: '
-            + CONFIG.isAIConfigured() + ', People configured: ' + CONFIG.isPeopleAIConfigured());
+        console.log('[LiSeSca] AI config saved. Model: ' + selectedModel
+            + ', Job configured: ' + CONFIG.isAIConfigured()
+            + ', People configured: ' + CONFIG.isPeopleAIConfigured());
         this.hideAIConfig();
     },
 
