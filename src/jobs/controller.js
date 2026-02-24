@@ -24,6 +24,22 @@ import { JobOutput } from './output.js';
 export const JobController = {
 
     /**
+     * Update the progress display line based on current state.
+     * Shows "Progress: X/Y (Z saved)" when total is known (All mode),
+     * or "Progress: X processed (Z saved)" otherwise.
+     */
+    updateProgressDisplay: function() {
+        var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
+        var processed = State.getJobsProcessed();
+        var saved = State.getBuffer().length;
+        if (totalKnown > 0) {
+            UI.showProgress('Progress: ' + processed + '/' + totalKnown + ' (' + saved + ' saved)');
+        } else {
+            UI.showProgress('Progress: ' + processed + ' processed (' + saved + ' saved)');
+        }
+    },
+
+    /**
      * Start a new job scraping session.
      * @param {string} pageCount - Number of pages ('1', '3', '5', '10').
      */
@@ -115,14 +131,7 @@ export const JobController = {
             AIClient.resetConversation();
         }
 
-        var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
-        if (totalKnown > 0) {
-            var processed = State.getJobsProcessed();
-            var saved = state.scrapedBuffer.length;
-            UI.showProgress('Progress: ' + processed + '/' + totalKnown + ' (' + saved + ' saved)');
-        } else {
-            UI.showProgress('');
-        }
+        this.updateProgressDisplay();
         UI.showStatus('Page ' + state.currentPage + ' — Loading job cards...');
 
         // Wait for at least some job cards to appear in the DOM
@@ -193,22 +202,15 @@ export const JobController = {
         var jobId = jobIds[jobIndex];
         var totalOnPage = jobIds.length;
 
-        // Update status display
+        // Increment processed counter BEFORE display so current job is counted
+        State.incrementJobsProcessed();
+
+        // Update status and progress display
         var statusMsg = 'Page ' + state.currentPage
             + ' (' + (pagesScraped + 1) + ' of ' + state.targetPageCount + ')'
             + ' — Job ' + (jobIndex + 1) + ' of ' + totalOnPage;
-        var totalKnown = State.get(State.KEYS.JOB_TOTAL, 0);
-        if (totalKnown > 0) {
-            var processed = State.getJobsProcessed();
-            var saved = state.scrapedBuffer.length;
-            UI.showProgress('Progress: ' + processed + '/' + totalKnown + ' (' + saved + ' saved)');
-        } else {
-            UI.showProgress('');
-        }
+        self.updateProgressDisplay();
         UI.showStatus(statusMsg);
-
-        // Increment processed counter for this job
-        State.incrementJobsProcessed();
 
         // Show AI stats if AI filtering is active
         var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
@@ -385,6 +387,8 @@ export const JobController = {
             if (job) {
                 // Append this single job to the buffer immediately (data safety)
                 State.appendBuffer([job]);
+                // Refresh progress to reflect updated saved count
+                self.updateProgressDisplay();
                 console.log('[LiSeSca] Job ' + (jobIndex + 1) + '/' + totalOnPage
                     + ' extracted: ' + job.jobTitle);
             } else {
