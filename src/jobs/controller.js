@@ -243,9 +243,54 @@ export const JobController = {
 
                 return JobExtractor.getRenderedCard(jobId).then(function(result) {
                     if (!result.card) {
-                        // Can't get card data, proceed anyway
-                        console.log('[LiSeSca] AI filter: no card data, proceeding with job ' + jobId);
-                        return JobExtractor.extractFullJob(jobId);
+                        // Can't get card data, fetch full details and evaluate
+                        console.log('[LiSeSca] AI filter: no card data, must evaluate full job details for ' + jobId);
+                        UI.showStatus(statusMsg + ' — AI: Fetching details (no card)...');
+                        
+                        return JobExtractor.extractFullJob(jobId).then(function(job) {
+                            if (!job) {
+                                return null;
+                            }
+                            if (!State.isScraping()) {
+                                return null;
+                            }
+                            
+                            var fullJobMarkdown = JobOutput.formatJobMarkdown(job);
+                            UI.showStatus(statusMsg + ' — AI: Full evaluation...');
+                            
+                            var evalCall = fullAIMode 
+                                ? AIClient.evaluateFullJob(fullJobMarkdown)
+                                : AIClient.evaluateJob(fullJobMarkdown);
+                                
+                            return evalCall.then(function(evalResult) {
+                                if (!State.isScraping()) {
+                                    return null;
+                                }
+                                
+                                State.incrementAIJobsEvaluated();
+                                UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+                                
+                                var accept = fullAIMode ? evalResult.accept : evalResult;
+                                var reason = fullAIMode ? evalResult.reason : '';
+                                
+                                if (accept) {
+                                    console.log('[LiSeSca] AI accepted job (no card): ' + job.jobTitle + (reason ? ' - ' + reason : ''));
+                                    State.incrementAIJobsAccepted();
+                                    UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+                                    UI.showStatus(statusMsg + ' — AI: Accept');
+                                    return job;
+                                }
+                                
+                                console.log('[LiSeSca] AI REJECT (no card): ' + job.jobTitle + (reason ? ' - ' + reason : ''));
+                                UI.showStatus(statusMsg + ' — AI: Reject');
+                                State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                return Emulator.randomDelay(300, 600).then(function() {
+                                    self.scrapeNextJob();
+                                }).then(function() {
+                                    return 'skip';
+                                });
+                            });
+                        });
                     }
 
                     var cardData = JobExtractor.extractCardBasics(result.card);

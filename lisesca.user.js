@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.4.0
+// @version      0.4.1
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -28,7 +28,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.4.0',
+        VERSION: '0.4.1',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -5352,12 +5352,9 @@ USER'S CRITERIA:
                 var elapsed = 0;
 
                 var poll = setInterval(function() {
-                    // Check if the detail container has content referencing this job.
-                    // The detail container's parent element has a data-job-details-events-trigger
-                    // attribute, and the URL in the detail title link contains the job ID.
                     var detailTitle = document.querySelector(JobSelectors.DETAIL_TITLE);
                     if (detailTitle) {
-                        // Check if there's a link inside the title that contains our job ID
+                        // 1. Check if there's a link inside the title that contains our job ID
                         var titleLink = detailTitle.querySelector('a');
                         if (titleLink) {
                             var href = titleLink.getAttribute('href') || '';
@@ -5368,20 +5365,36 @@ USER'S CRITERIA:
                                 return;
                             }
                         }
-                        // If we can see any title and enough time has passed, accept it
-                        // (some job cards may not have matching links)
-                        if (elapsed >= 2000) {
-                            clearInterval(poll);
-                            console.log('[LiSeSca] Detail panel has content (accepting after delay).');
-                            resolve(true);
-                            return;
+                        
+                        // 2. Check the data-job-id or trigger attribute on the container
+                        var triggerEl = document.querySelector('[data-job-details-events-trigger]');
+                        if (triggerEl) {
+                            var triggerAttr = triggerEl.getAttribute('data-job-details-events-trigger') || '';
+                            if (triggerAttr.indexOf(jobId) !== -1) {
+                                clearInterval(poll);
+                                console.log('[LiSeSca] Detail panel loaded for job (by trigger): ' + jobId);
+                                resolve(true);
+                                return;
+                            }
+                        }
+
+                        // 3. Check for job ID in the Apply button
+                        var applyBtn = document.querySelector('.jobs-apply-button');
+                        if (applyBtn) {
+                            var applyAttr = applyBtn.getAttribute('data-job-id') || '';
+                            if (applyAttr && applyAttr.indexOf(jobId) !== -1) {
+                                clearInterval(poll);
+                                console.log('[LiSeSca] Detail panel loaded for job (by apply button): ' + jobId);
+                                resolve(true);
+                                return;
+                            }
                         }
                     }
 
                     elapsed += pollIntervalMs;
                     if (elapsed >= maxWaitMs) {
                         clearInterval(poll);
-                        console.warn('[LiSeSca] Detail panel did not load for job ' + jobId + ' after ' + maxWaitMs + 'ms.');
+                        console.warn('[LiSeSca] Detail panel did not load for job ' + jobId + ' after ' + maxWaitMs + 'ms. Skipping.');
                         resolve(false);
                     }
                 }, pollIntervalMs);
@@ -6299,9 +6312,54 @@ USER'S CRITERIA:
 
                     return JobExtractor.getRenderedCard(jobId).then(function(result) {
                         if (!result.card) {
-                            // Can't get card data, proceed anyway
-                            console.log('[LiSeSca] AI filter: no card data, proceeding with job ' + jobId);
-                            return JobExtractor.extractFullJob(jobId);
+                            // Can't get card data, fetch full details and evaluate
+                            console.log('[LiSeSca] AI filter: no card data, must evaluate full job details for ' + jobId);
+                            UI.showStatus(statusMsg + ' — AI: Fetching details (no card)...');
+                            
+                            return JobExtractor.extractFullJob(jobId).then(function(job) {
+                                if (!job) {
+                                    return null;
+                                }
+                                if (!State.isScraping()) {
+                                    return null;
+                                }
+                                
+                                var fullJobMarkdown = JobOutput.formatJobMarkdown(job);
+                                UI.showStatus(statusMsg + ' — AI: Full evaluation...');
+                                
+                                var evalCall = fullAIMode 
+                                    ? AIClient.evaluateFullJob(fullJobMarkdown)
+                                    : AIClient.evaluateJob(fullJobMarkdown);
+                                    
+                                return evalCall.then(function(evalResult) {
+                                    if (!State.isScraping()) {
+                                        return null;
+                                    }
+                                    
+                                    State.incrementAIJobsEvaluated();
+                                    UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+                                    
+                                    var accept = fullAIMode ? evalResult.accept : evalResult;
+                                    var reason = fullAIMode ? evalResult.reason : '';
+                                    
+                                    if (accept) {
+                                        console.log('[LiSeSca] AI accepted job (no card): ' + job.jobTitle + (reason ? ' - ' + reason : ''));
+                                        State.incrementAIJobsAccepted();
+                                        UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
+                                        UI.showStatus(statusMsg + ' — AI: Accept');
+                                        return job;
+                                    }
+                                    
+                                    console.log('[LiSeSca] AI REJECT (no card): ' + job.jobTitle + (reason ? ' - ' + reason : ''));
+                                    UI.showStatus(statusMsg + ' — AI: Reject');
+                                    State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
+                                    return Emulator.randomDelay(300, 600).then(function() {
+                                        self.scrapeNextJob();
+                                    }).then(function() {
+                                        return 'skip';
+                                    });
+                                });
+                            });
                         }
 
                         var cardData = JobExtractor.extractCardBasics(result.card);
