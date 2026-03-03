@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.4.1
+// @version      0.5.0
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -28,7 +28,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.4.1',
+        VERSION: '0.5.0',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -271,6 +271,8 @@
             // AI evaluation statistics
             JOBS_PROCESSED: 'lisesca_jobsProcessed',        // count of all jobs processed (saved + skipped)
             AI_JOBS_EVALUATED: 'lisesca_aiJobsEvaluated',  // count of jobs evaluated by AI
+            AI_JOBS_TRIAGED: 'lisesca_aiJobsTriaged',      // count of jobs triaged by AI
+            AI_JOBS_FULL_EVALUATED: 'lisesca_aiJobsFullEvaluated', // count of jobs fully evaluated by AI
             AI_JOBS_ACCEPTED: 'lisesca_aiJobsAccepted',    // count of jobs accepted by AI
             AI_PEOPLE_EVALUATED: 'lisesca_aiPeopleEvaluated', // count of people evaluated by AI
             AI_PEOPLE_ACCEPTED: 'lisesca_aiPeopleAccepted'    // count of people accepted by AI
@@ -353,6 +355,8 @@
             // Reset processing and AI evaluation counters
             this.set(this.KEYS.JOBS_PROCESSED, 0);
             this.set(this.KEYS.AI_JOBS_EVALUATED, 0);
+            this.set(this.KEYS.AI_JOBS_TRIAGED, 0);
+            this.set(this.KEYS.AI_JOBS_FULL_EVALUATED, 0);
             this.set(this.KEYS.AI_JOBS_ACCEPTED, 0);
             this.set(this.KEYS.AI_PEOPLE_EVALUATED, 0);
             this.set(this.KEYS.AI_PEOPLE_ACCEPTED, 0);
@@ -599,6 +603,38 @@
         },
 
         /**
+         * Get the count of jobs triaged by AI in this session.
+         * @returns {number}
+         */
+        getAIJobsTriaged: function() {
+            return this.get(this.KEYS.AI_JOBS_TRIAGED, 0);
+        },
+
+        /**
+         * Increment the AI jobs triaged counter.
+         */
+        incrementAIJobsTriaged: function() {
+            var current = this.get(this.KEYS.AI_JOBS_TRIAGED, 0);
+            this.set(this.KEYS.AI_JOBS_TRIAGED, current + 1);
+        },
+
+        /**
+         * Get the count of jobs fully evaluated by AI in this session.
+         * @returns {number}
+         */
+        getAIJobsFullEvaluated: function() {
+            return this.get(this.KEYS.AI_JOBS_FULL_EVALUATED, 0);
+        },
+
+        /**
+         * Increment the AI jobs fully evaluated counter.
+         */
+        incrementAIJobsFullEvaluated: function() {
+            var current = this.get(this.KEYS.AI_JOBS_FULL_EVALUATED, 0);
+            this.set(this.KEYS.AI_JOBS_FULL_EVALUATED, current + 1);
+        },
+
+        /**
          * Increment the AI people evaluated counter.
          */
         incrementAIPeopleEvaluated: function() {
@@ -667,6 +703,8 @@
             GM_deleteValue(this.KEYS.JOB_TOTAL);
             GM_deleteValue(this.KEYS.JOBS_PROCESSED);
             GM_deleteValue(this.KEYS.AI_JOBS_EVALUATED);
+            GM_deleteValue(this.KEYS.AI_JOBS_TRIAGED);
+            GM_deleteValue(this.KEYS.AI_JOBS_FULL_EVALUATED);
             GM_deleteValue(this.KEYS.AI_JOBS_ACCEPTED);
             GM_deleteValue(this.KEYS.AI_PEOPLE_EVALUATED);
             GM_deleteValue(this.KEYS.AI_PEOPLE_ACCEPTED);
@@ -2899,6 +2937,149 @@ USER'S CRITERIA:
                 background: #30363d;
             }
 
+            /* ---- Summary overlay ---- */
+            .lisesca-summary-overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.7);
+                z-index: 10003;
+                justify-content: center;
+                align-items: center;
+            }
+            .lisesca-summary-overlay.lisesca-visible {
+                display: flex;
+            }
+
+            .lisesca-summary-panel {
+                background: #1b1f23;
+                color: #e1e4e8;
+                border-radius: 10px;
+                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+                padding: 24px;
+                width: 380px;
+                max-width: 90vw;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 13px;
+                border: 1px solid #30363d;
+            }
+
+            .lisesca-summary-title {
+                font-size: 18px;
+                font-weight: 600;
+                margin-bottom: 8px;
+                color: #f0f6fc;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .lisesca-summary-interrupted {
+                display: none;
+                background: rgba(218, 54, 51, 0.1);
+                border: 1px solid rgba(218, 54, 51, 0.4);
+                color: #ff7b72;
+                padding: 8px 12px;
+                border-radius: 6px;
+                margin-bottom: 16px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            .lisesca-summary-interrupted.lisesca-visible {
+                display: block;
+            }
+
+            .lisesca-summary-section {
+                margin-bottom: 20px;
+                background: #0d1117;
+                border-radius: 6px;
+                padding: 12px;
+                border: 1px solid #30363d;
+            }
+
+            .lisesca-summary-row {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 8px;
+                padding-bottom: 8px;
+                border-bottom: 1px solid #21262d;
+            }
+            .lisesca-summary-row:last-child {
+                margin-bottom: 0;
+                padding-bottom: 0;
+                border-bottom: none;
+            }
+
+            .lisesca-summary-label {
+                color: #8b949e;
+            }
+
+            .lisesca-summary-value {
+                font-weight: 600;
+                color: #c9d1d9;
+            }
+            .lisesca-summary-value.lisesca-highlight {
+                color: #58a6ff;
+            }
+            .lisesca-summary-value.lisesca-success {
+                color: #3fb950;
+            }
+
+            .lisesca-summary-buttons {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                margin-top: 24px;
+            }
+
+            .lisesca-summary-download {
+                width: 100%;
+                background: #2ea44f;
+                color: #ffffff;
+                border: none;
+                border-radius: 6px;
+                padding: 12px;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.15s;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                gap: 8px;
+            }
+            .lisesca-summary-download:hover {
+                background: #3fb950;
+            }
+            
+            .lisesca-summary-download--jobs {
+                background: #1f6feb;
+            }
+            .lisesca-summary-download--jobs:hover {
+                background: #388bfd;
+            }
+
+            .lisesca-summary-clear {
+                width: 100%;
+                background: transparent;
+                color: #8b949e;
+                border: 1px solid #30363d;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 13px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: all 0.15s;
+            }
+            .lisesca-summary-clear:hover {
+                background: #21262d;
+                color: #c9d1d9;
+                border-color: #8b949e;
+            }
+
             /* AI toggle in scrape menu - disabled state */
             .lisesca-checkbox-label.lisesca-disabled {
                 opacity: 0.5;
@@ -4231,6 +4412,209 @@ USER'S CRITERIA:
             }
         },
 
+        // --- Summary panel ---
+        summaryOverlay: null,
+
+        /**
+         * Create the summary panel overlay.
+         */
+        createSummaryPanel: function() {
+            this.summaryOverlay = document.createElement('div');
+            this.summaryOverlay.className = 'lisesca-summary-overlay';
+            this.summaryOverlay.id = 'lisesca-summary-overlay';
+
+            var panel = document.createElement('div');
+            panel.className = 'lisesca-summary-panel';
+
+            var title = document.createElement('div');
+            title.className = 'lisesca-summary-title';
+            title.innerHTML = '<span style="font-size: 20px;">📊</span> Scrape Summary';
+
+            var interruptedMsg = document.createElement('div');
+            interruptedMsg.className = 'lisesca-summary-interrupted';
+            interruptedMsg.id = 'lisesca-summary-interrupted';
+            interruptedMsg.textContent = '⚠️ Session stopped early. Partial results are available below.';
+
+            var contentContainer = document.createElement('div');
+            contentContainer.id = 'lisesca-summary-content';
+
+            var buttonsDiv = document.createElement('div');
+            buttonsDiv.className = 'lisesca-summary-buttons';
+
+            var downloadBtn = document.createElement('button');
+            downloadBtn.className = 'lisesca-summary-download';
+            downloadBtn.id = 'lisesca-summary-download';
+            downloadBtn.innerHTML = '⬇️ Download Results';
+            downloadBtn.addEventListener('click', function() {
+                var mode = State.getScrapeMode();
+                if (mode === 'jobs') {
+                    JobController$1.downloadResults();
+                } else {
+                    Controller$1.downloadResults();
+                }
+            });
+
+            var clearBtn = document.createElement('button');
+            clearBtn.className = 'lisesca-summary-clear';
+            clearBtn.textContent = 'Clear Data & Close';
+            clearBtn.addEventListener('click', function() {
+                State.clear();
+                UI.hideSummary();
+                UI.showIdleState();
+            });
+
+            buttonsDiv.appendChild(downloadBtn);
+            buttonsDiv.appendChild(clearBtn);
+
+            panel.appendChild(title);
+            panel.appendChild(interruptedMsg);
+            panel.appendChild(contentContainer);
+            panel.appendChild(buttonsDiv);
+
+            this.summaryOverlay.appendChild(panel);
+            document.body.appendChild(this.summaryOverlay);
+        },
+
+        /**
+         * Helper to create a row in the summary panel
+         */
+        _createSummaryRow: function(label, value, valueClass) {
+            var row = document.createElement('div');
+            row.className = 'lisesca-summary-row';
+            
+            var labelEl = document.createElement('div');
+            labelEl.className = 'lisesca-summary-label';
+            labelEl.textContent = label;
+            
+            var valueEl = document.createElement('div');
+            valueEl.className = 'lisesca-summary-value' + (valueClass ? ' ' + valueClass : '');
+            valueEl.textContent = value;
+            
+            row.appendChild(labelEl);
+            row.appendChild(valueEl);
+            return row;
+        },
+
+        /**
+         * Show the summary panel with statistics.
+         * @param {Object} stats - The statistics object.
+         * @param {boolean} interrupted - Whether the session was stopped early.
+         */
+        showSummary: function(stats, interrupted) {
+            // Ensure UI is cleanly reset
+            this.hideStatus();
+            this.hideAIStats();
+            this.hideNoResults();
+
+            var container = document.getElementById('lisesca-summary-content');
+            if (!container) return;
+            
+            container.innerHTML = ''; // Clear previous content
+
+            // Handle interrupted message
+            var interruptedMsg = document.getElementById('lisesca-summary-interrupted');
+            if (interruptedMsg) {
+                if (interrupted) {
+                    interruptedMsg.classList.add('lisesca-visible');
+                } else {
+                    interruptedMsg.classList.remove('lisesca-visible');
+                }
+            }
+
+            // Style the download button based on mode
+            var downloadBtn = document.getElementById('lisesca-summary-download');
+            if (downloadBtn) {
+                if (stats.type === 'jobs') {
+                    downloadBtn.classList.add('lisesca-summary-download--jobs');
+                } else {
+                    downloadBtn.classList.remove('lisesca-summary-download--jobs');
+                }
+                
+                // Disable download if nothing was saved
+                if (stats.saved === 0) {
+                    downloadBtn.disabled = true;
+                    downloadBtn.style.opacity = '0.5';
+                    downloadBtn.style.cursor = 'not-allowed';
+                    downloadBtn.innerHTML = 'No Results to Download';
+                } else {
+                    downloadBtn.disabled = false;
+                    downloadBtn.style.opacity = '1';
+                    downloadBtn.style.cursor = 'pointer';
+                    downloadBtn.innerHTML = '⬇️ Download Results (' + stats.saved + ')';
+                }
+            }
+
+            // Base stats section
+            var baseSection = document.createElement('div');
+            baseSection.className = 'lisesca-summary-section';
+            
+            baseSection.appendChild(this._createSummaryRow('Pages Scanned', stats.pages));
+            
+            if (stats.type === 'jobs') {
+                baseSection.appendChild(this._createSummaryRow('Total Processed', stats.processed));
+            }
+            
+            baseSection.appendChild(this._createSummaryRow(
+                stats.type === 'jobs' ? 'Jobs Saved' : 'Profiles Saved', 
+                stats.saved, 
+                stats.saved > 0 ? 'lisesca-success' : ''
+            ));
+            
+            container.appendChild(baseSection);
+
+            // AI stats section (if applicable)
+            if (stats.aiEnabled) {
+                var aiSection = document.createElement('div');
+                aiSection.className = 'lisesca-summary-section';
+                
+                var aiTitle = document.createElement('div');
+                aiTitle.style.fontSize = '11px';
+                aiTitle.style.color = '#8b949e';
+                aiTitle.style.textTransform = 'uppercase';
+                aiTitle.style.letterSpacing = '0.5px';
+                aiTitle.style.marginBottom = '8px';
+                aiTitle.textContent = 'AI Filtering Stats';
+                aiSection.appendChild(aiTitle);
+
+                if (stats.type === 'jobs') {
+                    if (stats.fullAIEnabled) {
+                        aiSection.appendChild(this._createSummaryRow('Triaged (Cards)', stats.aiTriaged));
+                        aiSection.appendChild(this._createSummaryRow('Fully Evaluated', stats.aiFullEvaluated));
+                    } else {
+                        aiSection.appendChild(this._createSummaryRow('Evaluated', stats.aiEvaluated));
+                    }
+                    aiSection.appendChild(this._createSummaryRow('Accepted', stats.aiAccepted, 'lisesca-highlight'));
+                } else {
+                    aiSection.appendChild(this._createSummaryRow('Evaluated', stats.aiEvaluated));
+                    aiSection.appendChild(this._createSummaryRow('Accepted (Score ≥3)', stats.aiAccepted, 'lisesca-highlight'));
+                }
+                
+                container.appendChild(aiSection);
+            }
+
+            this.summaryOverlay.classList.add('lisesca-visible');
+        },
+
+        /**
+         * Hide the summary panel.
+         */
+        hideSummary: function() {
+            if (this.summaryOverlay) {
+                this.summaryOverlay.classList.remove('lisesca-visible');
+            }
+        },
+
+        /**
+         * Remove the summary panel from the DOM.
+         */
+        removeSummaryPanel: function() {
+            if (this.summaryOverlay && this.summaryOverlay.parentNode) {
+                this.summaryOverlay.parentNode.removeChild(this.summaryOverlay);
+                console.log('[LiSeSca] Summary panel removed.');
+            }
+            this.summaryOverlay = null;
+        },
+
         // --- SPA Navigation Support ---
 
         /**
@@ -4286,9 +4670,12 @@ USER'S CRITERIA:
             this.removePanel();
             this.removeConfigPanel();
             this.removeAIConfigPanel();
+            this.removeSummaryPanel();
+            
             this.createPanel();
             this.createConfigPanel();
             this.createAIConfigPanel();
+            this.createSummaryPanel();
             console.log('[LiSeSca] UI panels rebuilt for new page.');
         }
     };
@@ -6337,6 +6724,7 @@ USER'S CRITERIA:
                                     }
                                     
                                     State.incrementAIJobsEvaluated();
+                                    State.incrementAIJobsFullEvaluated();
                                     UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                     
                                     var accept = fullAIMode ? evalResult.accept : evalResult;
@@ -6380,6 +6768,7 @@ USER'S CRITERIA:
 
                                 // Count this job as evaluated
                                 State.incrementAIJobsEvaluated();
+                                State.incrementAIJobsTriaged();
                                 UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
 
                                 if (decision === 'reject') {
@@ -6429,6 +6818,8 @@ USER'S CRITERIA:
                                             return null;
                                         }
 
+                                        State.incrementAIJobsFullEvaluated();
+
                                         var accept = evalResult.accept;
                                         var evalReason = evalResult.reason;
 
@@ -6466,6 +6857,7 @@ USER'S CRITERIA:
 
                                 // Count this job as evaluated
                                 State.incrementAIJobsEvaluated();
+                                State.incrementAIJobsFullEvaluated(); // Regular evaluation counts as full evaluation for simplicity
                                 UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
 
                                 if (!shouldDownload) {
@@ -6601,15 +6993,19 @@ USER'S CRITERIA:
         /**
          * Complete the job scraping session.
          */
-        finishScraping: function() {
+        finishScraping: function(interrupted) {
             var buffer = State.getBuffer();
             var totalJobs = buffer.length;
             var state = State.getScrapingState();
-            var pagesScraped = state.currentPage - state.startPage + 1;
+            var pagesScraped = state.currentPage - state.startPage + (interrupted ? 0 : 1);
+            var totalProcessed = State.getJobsProcessed();
 
-            // Get AI stats before clearing state
+            // Get AI stats
             var aiEnabled = State.getAIEnabled();
+            var fullAIEnabled = State.getFullAIEnabled();
             var aiEvaluated = State.getAIJobsEvaluated();
+            var aiTriaged = State.getAIJobsTriaged();
+            var aiFullEvaluated = State.getAIJobsFullEvaluated();
             var aiAccepted = State.getAIJobsAccepted();
 
             console.log('[LiSeSca] Job scraping finished! Total: ' + totalJobs + ' jobs across '
@@ -6621,25 +7017,19 @@ USER'S CRITERIA:
             UI.showProgress('');
             UI.hideAIStats();
 
-            if (totalJobs > 0) {
-                UI.showStatus('Done! ' + totalJobs + ' jobs scraped across '
-                    + pagesScraped + ' page(s). Downloading...');
-                JobOutput.downloadResults(buffer);
-                State.clear();
-                setTimeout(function() {
-                    UI.showIdleState();
-                }, 5000);
-            } else if (aiEnabled && aiEvaluated > 0) {
-                // AI filtering was active but no jobs matched - show special notification
-                State.clear();
-                UI.showNoResults(aiEvaluated, pagesScraped);
-            } else {
-                UI.showStatus('No jobs found.');
-                State.clear();
-                setTimeout(function() {
-                    UI.showIdleState();
-                }, 5000);
-            }
+            // Always show the summary instead of automatic download/clear
+            UI.showSummary({
+                type: 'jobs',
+                pages: pagesScraped,
+                processed: totalProcessed,
+                saved: totalJobs,
+                aiEnabled: aiEnabled,
+                fullAIEnabled: fullAIEnabled,
+                aiEvaluated: aiEvaluated,
+                aiTriaged: aiTriaged,
+                aiFullEvaluated: aiFullEvaluated,
+                aiAccepted: aiAccepted
+            }, interrupted);
         },
 
         /**
@@ -6650,7 +7040,19 @@ USER'S CRITERIA:
             Emulator.cancel();
             JobEmulator.cancel();
             State.set(State.KEYS.IS_SCRAPING, false);
-            this.finishScraping();
+            this.finishScraping(true); // pass interrupted=true
+        },
+
+        /**
+         * Trigger the download manually (called by UI summary panel)
+         */
+        downloadResults: function() {
+            var buffer = State.getBuffer();
+            if (buffer.length > 0) {
+                JobOutput.downloadResults(buffer);
+            } else {
+                console.warn('[LiSeSca] No jobs in buffer to download.');
+            }
         }
     };
 
@@ -6701,6 +7103,7 @@ USER'S CRITERIA:
             UI.createPanel();
             UI.createConfigPanel();
             UI.createAIConfigPanel();
+            UI.createSummaryPanel();
 
             // Check if we have an active scraping session to resume
             if (State.isScraping()) {
@@ -7069,14 +7472,14 @@ USER'S CRITERIA:
         /**
          * Complete the scraping session.
          */
-        finishScraping: function() {
+        finishScraping: function(interrupted) {
             var buffer = State.getBuffer();
             var totalProfiles = buffer.length;
             var aiEnabled = State.getPeopleAIEnabled();
             var aiEvaluated = State.getAIPeopleEvaluated();
             var aiAccepted = State.getAIPeopleAccepted();
             var state = State.getScrapingState();
-            var pagesScraped = state.currentPage - state.startPage + 1;
+            var pagesScraped = state.currentPage - state.startPage + (interrupted ? 0 : 1);
 
             console.log('[LiSeSca] Scraping finished! Total: ' + totalProfiles + ' profiles.');
             if (aiEnabled && aiEvaluated > 0) {
@@ -7085,24 +7488,15 @@ USER'S CRITERIA:
 
             UI.hideAIStats();
 
-            if (totalProfiles > 0) {
-                UI.showStatus('Done! ' + totalProfiles + ' profiles scraped. Downloading...');
-                Output.downloadResults(buffer);
-                State.clear();
-                setTimeout(function() {
-                    UI.showIdleState();
-                }, 5000);
-            } else if (aiEnabled && aiEvaluated > 0) {
-                // AI filtering was active but no profiles matched - show special notification
-                State.clear();
-                UI.showNoResults(aiEvaluated, pagesScraped, 'profile');
-            } else {
-                UI.showStatus('No profiles found.');
-                State.clear();
-                setTimeout(function() {
-                    UI.showIdleState();
-                }, 5000);
-            }
+            // Always show the summary instead of automatic download/clear
+            UI.showSummary({
+                type: 'people',
+                pages: pagesScraped,
+                saved: totalProfiles,
+                aiEnabled: aiEnabled,
+                aiEvaluated: aiEvaluated,
+                aiAccepted: aiAccepted
+            }, interrupted);
         },
 
         /**
@@ -7112,7 +7506,19 @@ USER'S CRITERIA:
             console.log('[LiSeSca] Scraping stopped by user.');
             Emulator.cancel();
             State.set(State.KEYS.IS_SCRAPING, false);
-            this.finishScraping();
+            this.finishScraping(true); // pass interrupted=true
+        },
+
+        /**
+         * Trigger the download manually (called by UI summary panel)
+         */
+        downloadResults: function() {
+            var buffer = State.getBuffer();
+            if (buffer.length > 0) {
+                Output.downloadResults(buffer);
+            } else {
+                console.warn('[LiSeSca] No profiles in buffer to download.');
+            }
         }
     };
 

@@ -24,6 +24,8 @@ export const State = {
         // AI evaluation statistics
         JOBS_PROCESSED: 'lisesca_jobsProcessed',        // count of all jobs processed (saved + skipped)
         AI_JOBS_EVALUATED: 'lisesca_aiJobsEvaluated',  // count of jobs evaluated by AI
+        AI_JOBS_TRIAGED: 'lisesca_aiJobsTriaged',      // count of jobs triaged by AI
+        AI_JOBS_FULL_EVALUATED: 'lisesca_aiJobsFullEvaluated', // count of jobs fully evaluated by AI
         AI_JOBS_ACCEPTED: 'lisesca_aiJobsAccepted',    // count of jobs accepted by AI
         AI_PEOPLE_EVALUATED: 'lisesca_aiPeopleEvaluated', // count of people evaluated by AI
         AI_PEOPLE_ACCEPTED: 'lisesca_aiPeopleAccepted'    // count of people accepted by AI
@@ -106,6 +108,8 @@ export const State = {
         // Reset processing and AI evaluation counters
         this.set(this.KEYS.JOBS_PROCESSED, 0);
         this.set(this.KEYS.AI_JOBS_EVALUATED, 0);
+        this.set(this.KEYS.AI_JOBS_TRIAGED, 0);
+        this.set(this.KEYS.AI_JOBS_FULL_EVALUATED, 0);
         this.set(this.KEYS.AI_JOBS_ACCEPTED, 0);
         this.set(this.KEYS.AI_PEOPLE_EVALUATED, 0);
         this.set(this.KEYS.AI_PEOPLE_ACCEPTED, 0);
@@ -352,6 +356,38 @@ export const State = {
     },
 
     /**
+     * Get the count of jobs triaged by AI in this session.
+     * @returns {number}
+     */
+    getAIJobsTriaged: function() {
+        return this.get(this.KEYS.AI_JOBS_TRIAGED, 0);
+    },
+
+    /**
+     * Increment the AI jobs triaged counter.
+     */
+    incrementAIJobsTriaged: function() {
+        var current = this.get(this.KEYS.AI_JOBS_TRIAGED, 0);
+        this.set(this.KEYS.AI_JOBS_TRIAGED, current + 1);
+    },
+
+    /**
+     * Get the count of jobs fully evaluated by AI in this session.
+     * @returns {number}
+     */
+    getAIJobsFullEvaluated: function() {
+        return this.get(this.KEYS.AI_JOBS_FULL_EVALUATED, 0);
+    },
+
+    /**
+     * Increment the AI jobs fully evaluated counter.
+     */
+    incrementAIJobsFullEvaluated: function() {
+        var current = this.get(this.KEYS.AI_JOBS_FULL_EVALUATED, 0);
+        this.set(this.KEYS.AI_JOBS_FULL_EVALUATED, current + 1);
+    },
+
+    /**
      * Increment the AI people evaluated counter.
      */
     incrementAIPeopleEvaluated: function() {
@@ -420,6 +456,8 @@ export const State = {
         GM_deleteValue(this.KEYS.JOB_TOTAL);
         GM_deleteValue(this.KEYS.JOBS_PROCESSED);
         GM_deleteValue(this.KEYS.AI_JOBS_EVALUATED);
+        GM_deleteValue(this.KEYS.AI_JOBS_TRIAGED);
+        GM_deleteValue(this.KEYS.AI_JOBS_FULL_EVALUATED);
         GM_deleteValue(this.KEYS.AI_JOBS_ACCEPTED);
         GM_deleteValue(this.KEYS.AI_PEOPLE_EVALUATED);
         GM_deleteValue(this.KEYS.AI_PEOPLE_ACCEPTED);

@@ -268,6 +268,7 @@ export const JobController = {
                                 }
                                 
                                 State.incrementAIJobsEvaluated();
+                                State.incrementAIJobsFullEvaluated();
                                 UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
                                 
                                 var accept = fullAIMode ? evalResult.accept : evalResult;
@@ -311,6 +312,7 @@ export const JobController = {
 
                             // Count this job as evaluated
                             State.incrementAIJobsEvaluated();
+                            State.incrementAIJobsTriaged();
                             UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
 
                             if (decision === 'reject') {
@@ -360,6 +362,8 @@ export const JobController = {
                                         return null;
                                     }
 
+                                    State.incrementAIJobsFullEvaluated();
+
                                     var accept = evalResult.accept;
                                     var evalReason = evalResult.reason;
 
@@ -397,6 +401,7 @@ export const JobController = {
 
                             // Count this job as evaluated
                             State.incrementAIJobsEvaluated();
+                            State.incrementAIJobsFullEvaluated(); // Regular evaluation counts as full evaluation for simplicity
                             UI.showAIStats(State.getAIJobsEvaluated(), State.getAIJobsAccepted());
 
                             if (!shouldDownload) {
@@ -532,15 +537,19 @@ export const JobController = {
     /**
      * Complete the job scraping session.
      */
-    finishScraping: function() {
+    finishScraping: function(interrupted) {
         var buffer = State.getBuffer();
         var totalJobs = buffer.length;
         var state = State.getScrapingState();
-        var pagesScraped = state.currentPage - state.startPage + 1;
+        var pagesScraped = state.currentPage - state.startPage + (interrupted ? 0 : 1);
+        var totalProcessed = State.getJobsProcessed();
 
-        // Get AI stats before clearing state
+        // Get AI stats
         var aiEnabled = State.getAIEnabled();
+        var fullAIEnabled = State.getFullAIEnabled();
         var aiEvaluated = State.getAIJobsEvaluated();
+        var aiTriaged = State.getAIJobsTriaged();
+        var aiFullEvaluated = State.getAIJobsFullEvaluated();
         var aiAccepted = State.getAIJobsAccepted();
 
         console.log('[LiSeSca] Job scraping finished! Total: ' + totalJobs + ' jobs across '
@@ -552,25 +561,19 @@ export const JobController = {
         UI.showProgress('');
         UI.hideAIStats();
 
-        if (totalJobs > 0) {
-            UI.showStatus('Done! ' + totalJobs + ' jobs scraped across '
-                + pagesScraped + ' page(s). Downloading...');
-            JobOutput.downloadResults(buffer);
-            State.clear();
-            setTimeout(function() {
-                UI.showIdleState();
-            }, 5000);
-        } else if (aiEnabled && aiEvaluated > 0) {
-            // AI filtering was active but no jobs matched - show special notification
-            State.clear();
-            UI.showNoResults(aiEvaluated, pagesScraped);
-        } else {
-            UI.showStatus('No jobs found.');
-            State.clear();
-            setTimeout(function() {
-                UI.showIdleState();
-            }, 5000);
-        }
+        // Always show the summary instead of automatic download/clear
+        UI.showSummary({
+            type: 'jobs',
+            pages: pagesScraped,
+            processed: totalProcessed,
+            saved: totalJobs,
+            aiEnabled: aiEnabled,
+            fullAIEnabled: fullAIEnabled,
+            aiEvaluated: aiEvaluated,
+            aiTriaged: aiTriaged,
+            aiFullEvaluated: aiFullEvaluated,
+            aiAccepted: aiAccepted
+        }, interrupted);
     },
 
     /**
@@ -581,6 +584,18 @@ export const JobController = {
         Emulator.cancel();
         JobEmulator.cancel();
         State.set(State.KEYS.IS_SCRAPING, false);
-        this.finishScraping();
+        this.finishScraping(true); // pass interrupted=true
+    },
+
+    /**
+     * Trigger the download manually (called by UI summary panel)
+     */
+    downloadResults: function() {
+        var buffer = State.getBuffer();
+        if (buffer.length > 0) {
+            JobOutput.downloadResults(buffer);
+        } else {
+            console.warn('[LiSeSca] No jobs in buffer to download.');
+        }
     }
 };

@@ -56,6 +56,7 @@ export const Controller = {
         UI.createPanel();
         UI.createConfigPanel();
         UI.createAIConfigPanel();
+        UI.createSummaryPanel();
 
         // Check if we have an active scraping session to resume
         if (State.isScraping()) {
@@ -424,14 +425,14 @@ export const Controller = {
     /**
      * Complete the scraping session.
      */
-    finishScraping: function() {
+    finishScraping: function(interrupted) {
         var buffer = State.getBuffer();
         var totalProfiles = buffer.length;
         var aiEnabled = State.getPeopleAIEnabled();
         var aiEvaluated = State.getAIPeopleEvaluated();
         var aiAccepted = State.getAIPeopleAccepted();
         var state = State.getScrapingState();
-        var pagesScraped = state.currentPage - state.startPage + 1;
+        var pagesScraped = state.currentPage - state.startPage + (interrupted ? 0 : 1);
 
         console.log('[LiSeSca] Scraping finished! Total: ' + totalProfiles + ' profiles.');
         if (aiEnabled && aiEvaluated > 0) {
@@ -440,24 +441,15 @@ export const Controller = {
 
         UI.hideAIStats();
 
-        if (totalProfiles > 0) {
-            UI.showStatus('Done! ' + totalProfiles + ' profiles scraped. Downloading...');
-            Output.downloadResults(buffer);
-            State.clear();
-            setTimeout(function() {
-                UI.showIdleState();
-            }, 5000);
-        } else if (aiEnabled && aiEvaluated > 0) {
-            // AI filtering was active but no profiles matched - show special notification
-            State.clear();
-            UI.showNoResults(aiEvaluated, pagesScraped, 'profile');
-        } else {
-            UI.showStatus('No profiles found.');
-            State.clear();
-            setTimeout(function() {
-                UI.showIdleState();
-            }, 5000);
-        }
+        // Always show the summary instead of automatic download/clear
+        UI.showSummary({
+            type: 'people',
+            pages: pagesScraped,
+            saved: totalProfiles,
+            aiEnabled: aiEnabled,
+            aiEvaluated: aiEvaluated,
+            aiAccepted: aiAccepted
+        }, interrupted);
     },
 
     /**
@@ -467,6 +459,18 @@ export const Controller = {
         console.log('[LiSeSca] Scraping stopped by user.');
         Emulator.cancel();
         State.set(State.KEYS.IS_SCRAPING, false);
-        this.finishScraping();
+        this.finishScraping(true); // pass interrupted=true
+    },
+
+    /**
+     * Trigger the download manually (called by UI summary panel)
+     */
+    downloadResults: function() {
+        var buffer = State.getBuffer();
+        if (buffer.length > 0) {
+            Output.downloadResults(buffer);
+        } else {
+            console.warn('[LiSeSca] No profiles in buffer to download.');
+        }
     }
 };
