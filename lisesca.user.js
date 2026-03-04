@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.5.0
+// @version      0.5.1
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -28,7 +28,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.5.0',
+        VERSION: '0.5.1',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -7062,6 +7062,9 @@ USER'S CRITERIA:
 
     const Controller = {
 
+        /** Timer for debouncing SPA navigation events */
+        _navigationTimer: null,
+
         /**
          * Initialize the script. Called once on every page load.
          * Sets up SPA navigation handler and builds UI if on a supported page.
@@ -7142,10 +7145,25 @@ USER'S CRITERIA:
                 return;
             }
 
-            // We're on a supported page now
-            // Wait a bit for LinkedIn to render the new page content
-            setTimeout(function() {
-                // Rebuild the panel (handles color change between people/jobs)
+            // First arrival from a non-search page: reload to reset execution context.
+            // Tampermonkey's sandboxed document proxy becomes stale after SPA navigation
+            // from a page where the script originally initialized, causing querySelectorAll
+            // to return empty results for dynamically-rendered DOM elements.
+            if (oldPageType === 'unknown') {
+                console.log('[LiSeSca] First navigation to ' + newPageType
+                    + ' page via SPA. Reloading for correct DOM access...');
+                window.location.reload();
+                return;
+            }
+
+            // Navigation between/within supported pages (filter changes, jobs↔people):
+            // Debounce to handle LinkedIn's rapid successive pushState calls
+            if (this._navigationTimer) {
+                clearTimeout(this._navigationTimer);
+            }
+            var self = this;
+            this._navigationTimer = setTimeout(function() {
+                self._navigationTimer = null;
                 UI.rebuildPanel();
                 console.log('[LiSeSca] Ready on ' + newPageType + ' page.');
 

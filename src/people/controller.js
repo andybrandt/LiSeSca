@@ -15,6 +15,9 @@ import { JobController } from '../jobs/controller.js';
 
 export const Controller = {
 
+    /** Timer for debouncing SPA navigation events */
+    _navigationTimer: null,
+
     /**
      * Initialize the script. Called once on every page load.
      * Sets up SPA navigation handler and builds UI if on a supported page.
@@ -95,10 +98,25 @@ export const Controller = {
             return;
         }
 
-        // We're on a supported page now
-        // Wait a bit for LinkedIn to render the new page content
-        setTimeout(function() {
-            // Rebuild the panel (handles color change between people/jobs)
+        // First arrival from a non-search page: reload to reset execution context.
+        // Tampermonkey's sandboxed document proxy becomes stale after SPA navigation
+        // from a page where the script originally initialized, causing querySelectorAll
+        // to return empty results for dynamically-rendered DOM elements.
+        if (oldPageType === 'unknown') {
+            console.log('[LiSeSca] First navigation to ' + newPageType
+                + ' page via SPA. Reloading for correct DOM access...');
+            window.location.reload();
+            return;
+        }
+
+        // Navigation between/within supported pages (filter changes, jobs↔people):
+        // Debounce to handle LinkedIn's rapid successive pushState calls
+        if (this._navigationTimer) {
+            clearTimeout(this._navigationTimer);
+        }
+        var self = this;
+        this._navigationTimer = setTimeout(function() {
+            self._navigationTimer = null;
             UI.rebuildPanel();
             console.log('[LiSeSca] Ready on ' + newPageType + ' page.');
 
