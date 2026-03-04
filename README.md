@@ -52,7 +52,14 @@ By default, Tampermonkey only allows scripts installed from its online repositor
    - **AI job selection** — enable to use AI filtering (requires setup, see below)
 6. Click **GO** to start scraping.
 7. The script will emulate human browsing on each page, then automatically navigate to the next page.
-8. When finished, a download dialog appears with your chosen export format.
+8. When finished (or when you press **STOP**), a **summary window** appears with statistics:
+   - Pages scanned, jobs/profiles saved
+   - AI filtering stats (if enabled): triaged, fully evaluated, accepted
+   - A prominent notice if the session was stopped early
+9. Use **Download Results** to export your data in the chosen format(s). You can download again if needed.
+10. Use **Clear Data & Close** when done to dismiss the summary and clear the session.
+
+**Tip:** If you press **STOP** mid-scrape, the same summary window appears so you can recover partial results instead of losing them.
 
 ### Configuration
 
