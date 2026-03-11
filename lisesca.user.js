@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.5.1
+// @version      0.5.2
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -261,6 +261,7 @@
             FORMATS: 'lisesca_formats',
             INCLUDE_VIEWED: 'lisesca_includeViewed',
             AI_ENABLED: 'lisesca_aiEnabled',          // AI job filtering toggle
+            INCLUDE_FIRST_ON_PAGE: 'lisesca_includeFirstOnPage', // Include first job card on each page
             FULL_AI_ENABLED: 'lisesca_fullAIEnabled', // Full AI evaluation toggle (three-tier)
             PEOPLE_AI_ENABLED: 'lisesca_peopleAIEnabled',          // AI people scoring toggle
             // Job-specific state keys
@@ -449,6 +450,35 @@
          */
         getIncludeViewed: function() {
             return this.get(this.KEYS.INCLUDE_VIEWED, true);
+        },
+
+        /**
+         * Save the "Include 1st on page" preference to persistent storage.
+         * @param {boolean} includeFirst - True to include the first job card on each page.
+         */
+        saveIncludeFirstOnPage: function(includeFirst) {
+            this.set(this.KEYS.INCLUDE_FIRST_ON_PAGE, includeFirst === true);
+        },
+
+        /**
+         * Retrieve the saved "Include 1st on page" preference.
+         * Defaults to true if not set (so users don't lose data by default).
+         * @returns {boolean}
+         */
+        getIncludeFirstOnPage: function() {
+            return this.get(this.KEYS.INCLUDE_FIRST_ON_PAGE, true);
+        },
+
+        /**
+         * Read the "Include 1st on page" preference from the UI checkbox.
+         * @returns {boolean} True if first job card on each page should be included.
+         */
+        readIncludeFirstOnPageFromUI: function() {
+            var includeFirstCheck = document.getElementById('lisesca-include-first-on-page');
+            if (!includeFirstCheck) {
+                return true;
+            }
+            return includeFirstCheck.checked;
         },
 
         /**
@@ -3232,6 +3262,7 @@ USER'S CRITERIA:
 
             var includeViewedRow = null;
             var includeViewedCheck = null;
+            var includeFirstRow = null;
             var aiEnabledRow = null;
             var aiEnabledCheck = null;
             var fullAIRow = null;
@@ -3248,12 +3279,44 @@ USER'S CRITERIA:
                 includeViewedCheck.type = 'checkbox';
                 includeViewedCheck.id = 'lisesca-include-viewed';
                 includeViewedCheck.checked = State.getIncludeViewed();
-                includeViewedCheck.addEventListener('change', function() {
-                    State.saveIncludeViewed(includeViewedCheck.checked);
-                });
                 includeViewedLabel.appendChild(includeViewedCheck);
                 includeViewedLabel.appendChild(document.createTextNode('Include viewed'));
                 includeViewedRow.appendChild(includeViewedLabel);
+
+                // "Include 1st on page" checkbox (sub-option of Include viewed)
+                includeFirstRow = document.createElement('div');
+                includeFirstRow.className = 'lisesca-toggle-row';
+                includeFirstRow.id = 'lisesca-include-first-row';
+                includeFirstRow.style.marginLeft = '16px';  // Visual hierarchy (indented)
+                // Visible only when AI is OFF and "Include viewed" is unchecked
+                var initialIncludeFirstVisible = !State.getAIEnabled() && !includeViewedCheck.checked;
+                includeFirstRow.style.display = initialIncludeFirstVisible ? 'flex' : 'none';
+
+                var includeFirstLabel = document.createElement('label');
+                includeFirstLabel.className = 'lisesca-checkbox-label';
+
+                var includeFirstCheck = document.createElement('input');
+                includeFirstCheck.type = 'checkbox';
+                includeFirstCheck.id = 'lisesca-include-first-on-page';
+                includeFirstCheck.checked = State.getIncludeFirstOnPage();
+                includeFirstCheck.addEventListener('change', function() {
+                    State.saveIncludeFirstOnPage(includeFirstCheck.checked);
+                });
+
+                includeFirstLabel.appendChild(includeFirstCheck);
+                includeFirstLabel.appendChild(document.createTextNode('Include 1st on page'));
+                includeFirstRow.appendChild(includeFirstLabel);
+
+                // "Include viewed" change handler — controls includeFirstRow visibility
+                includeViewedCheck.addEventListener('change', function() {
+                    State.saveIncludeViewed(includeViewedCheck.checked);
+                    // Show "Include 1st on page" only when Include viewed is OFF and AI is OFF
+                    if (!includeViewedCheck.checked && !aiEnabledCheck.checked) {
+                        includeFirstRow.style.display = 'flex';
+                    } else {
+                        includeFirstRow.style.display = 'none';
+                    }
+                });
 
                 // AI job selection toggle
                 aiEnabledRow = document.createElement('div');
@@ -3307,17 +3370,23 @@ USER'S CRITERIA:
                 fullAILabel.appendChild(document.createTextNode('Full AI evaluation'));
                 fullAIRow.appendChild(fullAILabel);
 
-                // AI enabled toggle controls Full AI row visibility
+                // AI enabled toggle controls Full AI row and includeFirstRow visibility
                 aiEnabledCheck.addEventListener('change', function() {
                     State.saveAIEnabled(aiEnabledCheck.checked);
                     // Show/hide Full AI row based on AI enabled state
                     if (aiEnabledCheck.checked) {
                         fullAIRow.style.display = 'flex';
+                        // Hide "Include 1st on page" when AI is ON
+                        includeFirstRow.style.display = 'none';
                     } else {
                         fullAIRow.style.display = 'none';
                         // Also disable Full AI when AI is disabled
                         fullAICheck.checked = false;
                         State.saveFullAIEnabled(false);
+                        // Show "Include 1st on page" if Include viewed is also unchecked
+                        if (!includeViewedCheck.checked) {
+                            includeFirstRow.style.display = 'flex';
+                        }
                     }
                 });
             } else {
@@ -3359,6 +3428,7 @@ USER'S CRITERIA:
 
                 if (isJobs) {
                     State.saveIncludeViewed(State.readIncludeViewedFromUI());
+                    State.saveIncludeFirstOnPage(State.readIncludeFirstOnPageFromUI());
                     JobController$1.startScraping(selectedValue);
                 } else {
                     Controller$1.startScraping(selectedValue);
@@ -3371,6 +3441,9 @@ USER'S CRITERIA:
             this.menu.appendChild(fmtRow);
             if (includeViewedRow) {
                 this.menu.appendChild(includeViewedRow);
+            }
+            if (includeFirstRow) {
+                this.menu.appendChild(includeFirstRow);
             }
             if (aiEnabledRow) {
                 this.menu.appendChild(aiEnabledRow);
@@ -6676,7 +6749,23 @@ USER'S CRITERIA:
 
             var includeViewed = State.getIncludeViewed();
             var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
-            var viewedCheck = includeViewed ? Promise.resolve(false) : JobExtractor.isJobViewed(jobId);
+
+            // First job card on each page is auto-viewed by LinkedIn.
+            // Force-include it when appropriate to prevent unintended data loss.
+            var isFirstOnPage = (jobIndex === 0);
+            var forceIncludeFirst = false;
+            if (isFirstOnPage) {
+                if (aiEnabled) {
+                    // AI mode: always include first card (AI will filter it)
+                    forceIncludeFirst = true;
+                } else {
+                    // Non-AI mode: respect the user preference
+                    forceIncludeFirst = State.getIncludeFirstOnPage();
+                }
+            }
+            var viewedCheck = (includeViewed || forceIncludeFirst)
+                ? Promise.resolve(false)
+                : JobExtractor.isJobViewed(jobId);
 
             viewedCheck.then(function(isViewed) {
                 if (!State.isScraping()) {

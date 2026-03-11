@@ -926,6 +926,7 @@ export const UI = {
 
         var includeViewedRow = null;
         var includeViewedCheck = null;
+        var includeFirstRow = null;
         var aiEnabledRow = null;
         var aiEnabledCheck = null;
         var fullAIRow = null;
@@ -942,12 +943,44 @@ export const UI = {
             includeViewedCheck.type = 'checkbox';
             includeViewedCheck.id = 'lisesca-include-viewed';
             includeViewedCheck.checked = State.getIncludeViewed();
-            includeViewedCheck.addEventListener('change', function() {
-                State.saveIncludeViewed(includeViewedCheck.checked);
-            });
             includeViewedLabel.appendChild(includeViewedCheck);
             includeViewedLabel.appendChild(document.createTextNode('Include viewed'));
             includeViewedRow.appendChild(includeViewedLabel);
+
+            // "Include 1st on page" checkbox (sub-option of Include viewed)
+            includeFirstRow = document.createElement('div');
+            includeFirstRow.className = 'lisesca-toggle-row';
+            includeFirstRow.id = 'lisesca-include-first-row';
+            includeFirstRow.style.marginLeft = '16px';  // Visual hierarchy (indented)
+            // Visible only when AI is OFF and "Include viewed" is unchecked
+            var initialIncludeFirstVisible = !State.getAIEnabled() && !includeViewedCheck.checked;
+            includeFirstRow.style.display = initialIncludeFirstVisible ? 'flex' : 'none';
+
+            var includeFirstLabel = document.createElement('label');
+            includeFirstLabel.className = 'lisesca-checkbox-label';
+
+            var includeFirstCheck = document.createElement('input');
+            includeFirstCheck.type = 'checkbox';
+            includeFirstCheck.id = 'lisesca-include-first-on-page';
+            includeFirstCheck.checked = State.getIncludeFirstOnPage();
+            includeFirstCheck.addEventListener('change', function() {
+                State.saveIncludeFirstOnPage(includeFirstCheck.checked);
+            });
+
+            includeFirstLabel.appendChild(includeFirstCheck);
+            includeFirstLabel.appendChild(document.createTextNode('Include 1st on page'));
+            includeFirstRow.appendChild(includeFirstLabel);
+
+            // "Include viewed" change handler — controls includeFirstRow visibility
+            includeViewedCheck.addEventListener('change', function() {
+                State.saveIncludeViewed(includeViewedCheck.checked);
+                // Show "Include 1st on page" only when Include viewed is OFF and AI is OFF
+                if (!includeViewedCheck.checked && !aiEnabledCheck.checked) {
+                    includeFirstRow.style.display = 'flex';
+                } else {
+                    includeFirstRow.style.display = 'none';
+                }
+            });
 
             // AI job selection toggle
             aiEnabledRow = document.createElement('div');
@@ -1001,17 +1034,23 @@ export const UI = {
             fullAILabel.appendChild(document.createTextNode('Full AI evaluation'));
             fullAIRow.appendChild(fullAILabel);
 
-            // AI enabled toggle controls Full AI row visibility
+            // AI enabled toggle controls Full AI row and includeFirstRow visibility
             aiEnabledCheck.addEventListener('change', function() {
                 State.saveAIEnabled(aiEnabledCheck.checked);
                 // Show/hide Full AI row based on AI enabled state
                 if (aiEnabledCheck.checked) {
                     fullAIRow.style.display = 'flex';
+                    // Hide "Include 1st on page" when AI is ON
+                    includeFirstRow.style.display = 'none';
                 } else {
                     fullAIRow.style.display = 'none';
                     // Also disable Full AI when AI is disabled
                     fullAICheck.checked = false;
                     State.saveFullAIEnabled(false);
+                    // Show "Include 1st on page" if Include viewed is also unchecked
+                    if (!includeViewedCheck.checked) {
+                        includeFirstRow.style.display = 'flex';
+                    }
                 }
             });
         } else {
@@ -1053,6 +1092,7 @@ export const UI = {
 
             if (isJobs) {
                 State.saveIncludeViewed(State.readIncludeViewedFromUI());
+                State.saveIncludeFirstOnPage(State.readIncludeFirstOnPageFromUI());
                 JobController.startScraping(selectedValue);
             } else {
                 Controller.startScraping(selectedValue);
@@ -1065,6 +1105,9 @@ export const UI = {
         this.menu.appendChild(fmtRow);
         if (includeViewedRow) {
             this.menu.appendChild(includeViewedRow);
+        }
+        if (includeFirstRow) {
+            this.menu.appendChild(includeFirstRow);
         }
         if (aiEnabledRow) {
             this.menu.appendChild(aiEnabledRow);

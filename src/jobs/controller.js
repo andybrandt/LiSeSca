@@ -220,7 +220,23 @@ export const JobController = {
 
         var includeViewed = State.getIncludeViewed();
         var aiEnabled = State.getAIEnabled() && AIClient.isConfigured();
-        var viewedCheck = includeViewed ? Promise.resolve(false) : JobExtractor.isJobViewed(jobId);
+
+        // First job card on each page is auto-viewed by LinkedIn.
+        // Force-include it when appropriate to prevent unintended data loss.
+        var isFirstOnPage = (jobIndex === 0);
+        var forceIncludeFirst = false;
+        if (isFirstOnPage) {
+            if (aiEnabled) {
+                // AI mode: always include first card (AI will filter it)
+                forceIncludeFirst = true;
+            } else {
+                // Non-AI mode: respect the user preference
+                forceIncludeFirst = State.getIncludeFirstOnPage();
+            }
+        }
+        var viewedCheck = (includeViewed || forceIncludeFirst)
+            ? Promise.resolve(false)
+            : JobExtractor.isJobViewed(jobId);
 
         viewedCheck.then(function(isViewed) {
             if (!State.isScraping()) {

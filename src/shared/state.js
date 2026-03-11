@@ -14,6 +14,7 @@ export const State = {
         FORMATS: 'lisesca_formats',
         INCLUDE_VIEWED: 'lisesca_includeViewed',
         AI_ENABLED: 'lisesca_aiEnabled',          // AI job filtering toggle
+        INCLUDE_FIRST_ON_PAGE: 'lisesca_includeFirstOnPage', // Include first job card on each page
         FULL_AI_ENABLED: 'lisesca_fullAIEnabled', // Full AI evaluation toggle (three-tier)
         PEOPLE_AI_ENABLED: 'lisesca_peopleAIEnabled',          // AI people scoring toggle
         // Job-specific state keys
@@ -202,6 +203,35 @@ export const State = {
      */
     getIncludeViewed: function() {
         return this.get(this.KEYS.INCLUDE_VIEWED, true);
+    },
+
+    /**
+     * Save the "Include 1st on page" preference to persistent storage.
+     * @param {boolean} includeFirst - True to include the first job card on each page.
+     */
+    saveIncludeFirstOnPage: function(includeFirst) {
+        this.set(this.KEYS.INCLUDE_FIRST_ON_PAGE, includeFirst === true);
+    },
+
+    /**
+     * Retrieve the saved "Include 1st on page" preference.
+     * Defaults to true if not set (so users don't lose data by default).
+     * @returns {boolean}
+     */
+    getIncludeFirstOnPage: function() {
+        return this.get(this.KEYS.INCLUDE_FIRST_ON_PAGE, true);
+    },
+
+    /**
+     * Read the "Include 1st on page" preference from the UI checkbox.
+     * @returns {boolean} True if first job card on each page should be included.
+     */
+    readIncludeFirstOnPageFromUI: function() {
+        var includeFirstCheck = document.getElementById('lisesca-include-first-on-page');
+        if (!includeFirstCheck) {
+            return true;
+        }
+        return includeFirstCheck.checked;
     },
 
     /**

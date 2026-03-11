@@ -75,6 +75,7 @@ By default, Tampermonkey only allows scripts installed from its online repositor
 5. Select output formats (XLSX is selected by default; CSV is available for people only).
 6. For jobs, additional options appear:
    - **Include viewed** — uncheck to skip jobs you have already viewed or applied to
+   - **Include 1st on page** — appears when "Include viewed" is unchecked and AI is off. LinkedIn auto-views the first job card on every page, so this option (checked by default) prevents that card from being skipped. When AI is enabled, the first card is always included automatically (so the AI can evaluate it).
    - **AI job selection** — enable to use basic AI filtering (requires AI setup, see below)
    - **Full AI evaluation** — enable for three-tier AI filtering instead of basic mode
 7. For people, if AI is configured:
