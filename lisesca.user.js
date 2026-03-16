@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.5.2
+// @version      0.5.3
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -6868,7 +6868,10 @@ USER'S CRITERIA:
                                     console.log('  Reason: ' + reason);
                                     UI.showStatus(statusMsg + ' — AI: Reject');
                                     State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
-                                    return Emulator.randomDelay(300, 600).then(function() {
+                                    // Click card so LinkedIn marks it as "Viewed" — prevents re-triaging on future runs
+                                    return JobExtractor.clickJobCard(jobId).then(function() {
+                                        return Emulator.randomDelay(300, 600);
+                                    }).then(function() {
                                         self.scrapeNextJob();
                                     }).then(function() {
                                         return 'skip';
@@ -6953,7 +6956,10 @@ USER'S CRITERIA:
                                     console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
                                     UI.showStatus(statusMsg + ' — AI: Skip');
                                     State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
-                                    return Emulator.randomDelay(300, 600).then(function() {
+                                    // Click card so LinkedIn marks it as "Viewed" — prevents re-triaging on future runs
+                                    return JobExtractor.clickJobCard(jobId).then(function() {
+                                        return Emulator.randomDelay(300, 600);
+                                    }).then(function() {
                                         self.scrapeNextJob();
                                     }).then(function() {
                                         return 'skip';

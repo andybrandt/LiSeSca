@@ -339,7 +339,10 @@ export const JobController = {
                                 console.log('  Reason: ' + reason);
                                 UI.showStatus(statusMsg + ' — AI: Reject');
                                 State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
-                                return Emulator.randomDelay(300, 600).then(function() {
+                                // Click card so LinkedIn marks it as "Viewed" — prevents re-triaging on future runs
+                                return JobExtractor.clickJobCard(jobId).then(function() {
+                                    return Emulator.randomDelay(300, 600);
+                                }).then(function() {
                                     self.scrapeNextJob();
                                 }).then(function() {
                                     return 'skip';
@@ -424,7 +427,10 @@ export const JobController = {
                                 console.log('[LiSeSca] AI skipped job: ' + cardData.jobTitle);
                                 UI.showStatus(statusMsg + ' — AI: Skip');
                                 State.set(State.KEYS.JOB_INDEX, jobIndex + 1);
-                                return Emulator.randomDelay(300, 600).then(function() {
+                                // Click card so LinkedIn marks it as "Viewed" — prevents re-triaging on future runs
+                                return JobExtractor.clickJobCard(jobId).then(function() {
+                                    return Emulator.randomDelay(300, 600);
+                                }).then(function() {
                                     self.scrapeNextJob();
                                 }).then(function() {
                                     return 'skip';
