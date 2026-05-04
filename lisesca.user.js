@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LiSeSca - LinkedIn Search Scraper
 // @namespace    https://github.com/andybrandt/lisesca
-// @version      0.5.3
+// @version      0.5.4
 // @description  Scrapes LinkedIn people search and job search results with human emulation
 // @author       Andy Brandt
 // @homepageURL  https://github.com/andybrandt/LiSeSca
@@ -28,7 +28,7 @@
     // Default settings for the scraper. These can be overridden
     // by user preferences stored in Tampermonkey's persistent storage.
     const CONFIG = {
-        VERSION: '0.5.1',
+        VERSION: '0.5.4',
         MIN_PAGE_TIME: 10,   // Minimum seconds to spend "scanning" each page
         MAX_PAGE_TIME: 40,   // Maximum seconds to spend "scanning" each page
         MIN_JOB_REVIEW_TIME: 3,  // Minimum seconds to spend "reviewing" each job detail
@@ -1203,9 +1203,9 @@ USER'S CRITERIA:
                         function: { name: toolChoice.name }
                     };
 
-                    // kimi-k2.5 has thinking enabled by default, which is incompatible
+                    // kimi-k2.5 and kimi-k2.6 have thinking enabled by default, which is incompatible
                     // with tool_choice. Disable thinking when forcing tool use.
-                    if (model === 'kimi-k2.5') {
+                    if (model === 'kimi-k2.5' || model === 'kimi-k2.6') {
                         request.thinking = { type: 'disabled' };
                     }
                 }

@@ -1,9 +1,10 @@
 {
   "name": "lisesca",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "LinkedIn Search Scraper - Tampermonkey userscript",
   "scripts": {
-    "build": "rollup -c"
+    "build": "rollup -c",
+    "test": "node tests/ai-client-moonshot.test.js"
   },
   "type": "module",
   "private": true,

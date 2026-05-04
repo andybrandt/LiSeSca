@@ -324,9 +324,9 @@ const PROVIDERS = {
                     function: { name: toolChoice.name }
                 };
 
-                // kimi-k2.5 has thinking enabled by default, which is incompatible
+                // kimi-k2.5 and kimi-k2.6 have thinking enabled by default, which is incompatible
                 // with tool_choice. Disable thinking when forcing tool use.
-                if (model === 'kimi-k2.5') {
+                if (model === 'kimi-k2.5' || model === 'kimi-k2.6') {
                     request.thinking = { type: 'disabled' };
                 }
             }
